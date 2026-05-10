@@ -239,14 +239,13 @@ async fn toggle_extractor(
             "html2text" => {
                 cfg.html2text = crate::extractor_config::Html2TextConfig {
                     max_wrap_width: 1000,
-                    raw_mode: false,
-                    no_link_wrapping: false,
+                    ..Default::default()
                 }
             }
             "htmd" => {
                 cfg.htmd = crate::extractor_config::HtmdConfig {
                     skip_tags: vec!["nav".to_string(), "script".to_string()],
-                    heading_style: "atx".to_string(),
+                    ..Default::default()
                 };
                 cfg.skip_tags = crate::extractor_config::DEFAULT_SKIP_TAGS
                     .iter()
@@ -268,7 +267,6 @@ async fn toggle_extractor(
             }
             "dom_smoothie" => {
                 cfg.dom_smoothie = crate::extractor_config::DomSmoothieConfig {
-                    text_mode: "markdown".to_string(),
                     ..Default::default()
                 }
             }
@@ -296,6 +294,9 @@ async fn toggle_extractor(
             }
             "html2text-py" => {
                 cfg.html2text_py = crate::extractor_config::Html2TextPythonConfig::default();
+            }
+            "markdownify" => {
+                cfg.markdownify = crate::extractor_config::MarkdownifyConfig::default();
             }
             "lightpanda" => {
                 cfg.lightpanda = crate::extractor_config::LightpandaConfig::default();
@@ -431,6 +432,13 @@ fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut Ex
                 state.config.html2text_py = cfg;
             }
         }
+        "markdownify" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "markdownify").clone())
+            {
+                state.config.markdownify = cfg;
+            }
+        }
         "lightpanda" => {
             if let Ok(cfg) =
                 serde_json::from_value(extractor_config_payload(config, "lightpanda").clone())
@@ -446,16 +454,15 @@ fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut Ex
             }
         }
         "e2m" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "e2m").clone())
+            if let Ok(cfg) = serde_json::from_value(extractor_config_payload(config, "e2m").clone())
             {
                 state.config.e2m = cfg;
             }
         }
         "html-to-markdown-go" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "html_to_markdown_go").clone())
-            {
+            if let Ok(cfg) = serde_json::from_value(
+                extractor_config_payload(config, "html_to_markdown_go").clone(),
+            ) {
                 state.config.html_to_markdown_go = cfg;
             }
         }

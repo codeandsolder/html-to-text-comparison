@@ -402,14 +402,14 @@
                     <div class="panel-header">
                         <div>
                             <h2>Compare Settings</h2>
-                            <div class="settings-summary">Compare the opened run's saved extractor settings against the current editor state.</div>
+                            <div class="settings-summary">Create a saved two-sided diff between the opened run's extractor output and the current editor state.</div>
                         </div>
                     </div>
                     <div class="panel-body">
                         <div class="variant-grid">
                             <select id="variantExtractor"></select>
                             <button onclick="compareCurrentSettings()" id="runSingleBtn">Preview In Place</button>
-                            <div class="full keyboard-hint">Uses the currently opened run as the baseline and reuses its saved source HTML when available.</div>
+                            <div class="full keyboard-hint">Uses the currently opened run as the baseline and reruns the selected extractor live on the right while you edit settings.</div>
                         </div>
                     </div>
                 </section>
@@ -454,14 +454,46 @@
             throw new Error('Failed to load diff library: expected window.Diff from jsdiff');
         }
 
-        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','e2m','fast_html2md','html2md','html2md-rs','html2text','html2text-py','html-to-markdown-go','htmd','lightpanda','llm_readability','mdka','mdream','nanohtml2text','percollate','readability','readable-readability','trafilatura','turndown','webclaw'];
+        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','e2m','fast_html2md','html2md','html2md-rs','html2text','html2text-py','html-to-markdown-go','htmd','lightpanda','llm_readability','markdownify','mdka','mdream','nanohtml2text','percollate','readability','readable-readability','trafilatura','turndown','webclaw'];
         const CONFIG_FIELDS = {
-            html2text: [{name:'max_wrap_width',type:'number'},{name:'raw_mode',type:'checkbox'},{name:'no_link_wrapping',type:'checkbox'}],
-            htmd: [{name:'skip_tags',type:'text'},{name:'heading_style',type:'select',options:['atx','setex']}],
+            html2text: [
+                {name:'max_wrap_width',type:'number'},{name:'min_wrap_width',type:'number'},
+                {name:'raw_mode',type:'checkbox'},{name:'no_link_wrapping',type:'checkbox'},
+                {name:'link_footnotes',type:'checkbox'},{name:'no_table_borders',type:'checkbox'},
+                {name:'unicode_strikeout',type:'checkbox'},{name:'decorate',type:'checkbox'},
+                {name:'pad_block_width',type:'checkbox'},{name:'allow_width_overflow',type:'checkbox'}
+            ],
+            htmd: [
+                {name:'skip_tags',type:'text'},{name:'heading_style',type:'select',options:['atx','setex']},
+                {name:'hr_style',type:'select',options:['asterisks','dashes','underscores']},
+                {name:'br_style',type:'select',options:['two_spaces','backslash']},
+                {name:'link_style',type:'select',options:['inlined','inlined_prefer_autolinks','referenced']},
+                {name:'link_reference_style',type:'select',options:['full','collapsed','shortcut']},
+                {name:'code_block_style',type:'select',options:['fenced','indented']},
+                {name:'code_block_fence',type:'select',options:['backticks','tildes']},
+                {name:'bullet_list_marker',type:'select',options:['*','-']},
+                {name:'ul_bullet_spacing',type:'number'},{name:'ol_number_spacing',type:'number'},
+                {name:'preformatted_code',type:'checkbox'},
+                {name:'translation_mode',type:'select',options:['pure','faithful']}
+            ],
             'html2md-rs': [{name:'ignore_tags',type:'text'}],
-            mdka: [{name:'mode',type:'select',options:['balanced','strict','minimal','semantic','preserve']},{name:'drop_interactive_shell',type:'checkbox'}],
-            readable_readability: [{name:'strip_unlikelys',type:'checkbox'},{name:'weight_classes',type:'checkbox'},{name:'clean_conditionally',type:'checkbox'}],
-            dom_smoothie: [{name:'max_elements_to_parse',type:'number'},{name:'text_mode',type:'select',options:['markdown','raw','formatted']}],
+            mdka: [
+                {name:'mode',type:'select',options:['balanced','strict','minimal','semantic','preserve']},
+                {name:'preserve_ids',type:'checkbox'},{name:'preserve_classes',type:'checkbox'},
+                {name:'preserve_data_attrs',type:'checkbox'},{name:'preserve_aria_attrs',type:'checkbox'},
+                {name:'preserve_unknown_attrs',type:'checkbox'},{name:'drop_presentation_attrs',type:'checkbox'},
+                {name:'drop_interactive_shell',type:'checkbox'},{name:'unwrap_unknown_wrappers',type:'checkbox'}
+            ],
+            'readable-readability': [
+                {name:'strip_unlikelys',type:'checkbox'},{name:'weight_classes',type:'checkbox'},
+                {name:'clean_conditionally',type:'checkbox'},{name:'clean_attributes',type:'checkbox'}
+            ],
+            dom_smoothie: [
+                {name:'max_elements_to_parse',type:'number'},{name:'text_mode',type:'select',options:['markdown','raw','formatted']},
+                {name:'n_top_candidates',type:'number'},
+                {name:'char_threshold',type:'number'},{name:'min_score_to_adjust',type:'number',float:true},
+                {name:'candidate_select_mode',type:'select',options:['readability','dom_smoothie']}
+            ],
             august: [{name:'max_width',type:'number'}],
             turndown: [
                 {name:'heading_style',type:'select',options:['setext','atx']},
@@ -474,16 +506,26 @@
                 {name:'link_reference_style',type:'select',options:['full','collapsed','shortcut']},
                 {name:'preformatted_code',type:'checkbox'},
             ],
-            percollate: [{name:'inline_images',type:'checkbox'},{name:'hyphenate',type:'checkbox'},{name:'fences',type:'checkbox'}],
+            percollate: [
+                {name:'inline_images',type:'checkbox'},{name:'hyphenate',type:'checkbox'},{name:'fences',type:'checkbox'},
+                {name:'fence',type:'select',options:['`','~']},{name:'emphasis',type:'select',options:['_','*']},
+                {name:'strong',type:'select',options:['_','*']},{name:'resource_link',type:'checkbox'},
+                {name:'rule',type:'select',options:['-','*','_']}
+            ],
             mdream: [
                 {name:'minimal',type:'checkbox'},{name:'isolate_main',type:'checkbox'},
                 {name:'frontmatter',type:'checkbox'},{name:'clean_urls',type:'checkbox'},{name:'tailwind',type:'checkbox'},
+                {name:'origin',type:'text'},{name:'clean_fragments',type:'checkbox'},
+                {name:'clean_empty_links',type:'checkbox'},{name:'clean_blank_lines',type:'checkbox'},
+                {name:'clean_redundant_links',type:'checkbox'},{name:'clean_self_link_headings',type:'checkbox'},
+                {name:'clean_empty_images',type:'checkbox'},{name:'clean_empty_link_text',type:'checkbox'},
+                {name:'filter_include',type:'text'},{name:'filter_exclude',type:'text'},
+                {name:'filter_process_children',type:'checkbox'},
+                {name:'frontmatter_meta_fields',type:'text'},{name:'extraction_selectors',type:'text'}
             ],
             trafilatura: [
                 {name:'favor_precision',type:'checkbox'},{name:'favor_recall',type:'checkbox'},
-                {name:'include_comments',type:'checkbox'},{name:'include_tables',type:'checkbox'},
-                {name:'include_images',type:'checkbox'},{name:'include_formatting',type:'checkbox'},
-                {name:'include_links',type:'checkbox'},{name:'deduplicate',type:'checkbox'},{name:'with_metadata',type:'checkbox'},
+                {name:'deduplicate',type:'checkbox'},{name:'with_metadata',type:'checkbox'},
             ],
             html2text_py: [
                 {name:'ignore_links',type:'checkbox'},{name:'ignore_images',type:'checkbox'},
@@ -492,8 +534,25 @@
                 {name:'inline_links',type:'checkbox'},{name:'google_doc',type:'checkbox'},
                 {name:'dash_unordered_list',type:'checkbox'},
             ],
+            markdownify: [
+                {name:'strip',type:'text'},{name:'convert',type:'text'},
+                {name:'autolinks',type:'checkbox'},{name:'default_title',type:'checkbox'},
+                {name:'heading_style',type:'select',options:['UNDERLINED','ATX','ATX_CLOSED','SETEXT']},
+                {name:'bullets',type:'text'},
+                {name:'strong_em_symbol',type:'select',options:['ASTERISK','UNDERSCORE']},
+                {name:'sub_symbol',type:'text'},{name:'sup_symbol',type:'text'},
+                {name:'newline_style',type:'select',options:['SPACES','BACKSLASH']},
+                {name:'code_language',type:'text'},
+                {name:'escape_asterisks',type:'checkbox'},{name:'escape_underscores',type:'checkbox'},
+                {name:'escape_misc',type:'checkbox'},
+                {name:'keep_inline_images_in',type:'text'},
+                {name:'table_infer_header',type:'checkbox'},
+                {name:'wrap',type:'checkbox'},{name:'wrap_width',type:'number'},
+                {name:'strip_document',type:'select',options:['STRIP','LSTRIP','RSTRIP','']},
+                {name:'strip_pre',type:'select',options:['STRIP','STRIP_ONE','']},
+                {name:'bs4_parser',type:'select',options:['','html.parser','lxml','html5lib']},
+            ],
             lightpanda: [
-                {name:'strip_js',type:'checkbox'},{name:'strip_css',type:'checkbox'},{name:'strip_ui',type:'checkbox'},
                 {name:'wait_until',type:'select',options:['load','domcontentloaded','networkidle','done']},
                 {name:'wait_ms',type:'number'},
             ],
@@ -502,27 +561,39 @@
                 {name:'include_css',type:'text'},{name:'exclude_css',type:'text'},
                 {name:'format',type:'select',options:['markdown','text','llm','html','json']},
             ],
-            e2m: [{name:'engine',type:'select',options:['unstructured','jina','firecrawl']}],
-            'html-to-markdown-go': [{name:'domain',type:'text'},{name:'plugins',type:'text'}],
+            e2m: [
+                {name:'engine',type:'select',options:['unstructured']},
+                {name:'langs',type:'text'},{name:'skip_headers_and_footers',type:'checkbox'},
+                {name:'include_image_link_in_text',type:'checkbox'}
+            ],
+            'html-to-markdown-go': [
+                {name:'domain',type:'text'},{name:'plugins',type:'text'},
+                {name:'include_selector',type:'text'},{name:'exclude_selector',type:'text'}
+            ],
         };
-        const CONFIGURABLE_EXTRACTORS = Object.keys(CONFIG_FIELDS);
+        const CONFIGURABLE_EXTRACTORS = Object.keys(CONFIG_FIELDS).filter(name => (CONFIG_FIELDS[name] || []).length > 0);
         const FIELD_MAP = {
-            html2text: {max_wrap_width:'html2text',raw_mode:'html2text',no_link_wrapping:'html2text'},
-            htmd: {skip_tags:'htmd',heading_style:'htmd'},
+            html2text: {max_wrap_width:'html2text',min_wrap_width:'html2text',raw_mode:'html2text',no_link_wrapping:'html2text',link_footnotes:'html2text',no_table_borders:'html2text',unicode_strikeout:'html2text',decorate:'html2text',pad_block_width:'html2text',allow_width_overflow:'html2text'},
+            htmd: {skip_tags:'htmd',heading_style:'htmd',hr_style:'htmd',br_style:'htmd',link_style:'htmd',link_reference_style:'htmd',code_block_style:'htmd',code_block_fence:'htmd',bullet_list_marker:'htmd',ul_bullet_spacing:'htmd',ol_number_spacing:'htmd',preformatted_code:'htmd',translation_mode:'htmd'},
             'html2md-rs': {ignore_tags:'html2md_rs'},
-            mdka: {mode:'mdka',drop_interactive_shell:'mdka'},
-            readable_readability: {strip_unlikelys:'readable_readability',weight_classes:'readable_readability',clean_conditionally:'readable_readability'},
-            dom_smoothie: {max_elements_to_parse:'dom_smoothie',text_mode:'dom_smoothie'},
+            mdka: {
+                mode:'mdka',preserve_ids:'mdka',preserve_classes:'mdka',preserve_data_attrs:'mdka',
+                preserve_aria_attrs:'mdka',preserve_unknown_attrs:'mdka',drop_presentation_attrs:'mdka',
+                drop_interactive_shell:'mdka',unwrap_unknown_wrappers:'mdka'
+            },
+            'readable-readability': {strip_unlikelys:'readable_readability',weight_classes:'readable_readability',clean_conditionally:'readable_readability',clean_attributes:'readable_readability'},
+            dom_smoothie: {max_elements_to_parse:'dom_smoothie',text_mode:'dom_smoothie',n_top_candidates:'dom_smoothie',char_threshold:'dom_smoothie',min_score_to_adjust:'dom_smoothie',candidate_select_mode:'dom_smoothie'},
             august: {max_width:'augus_max_width'},
             turndown: {heading_style:'turndown',hr:'turndown',bullet_list_marker:'turndown',code_block_style:'turndown',fence:'turndown',em_delimiter:'turndown',strong_delimiter:'turndown',link_style:'turndown',link_reference_style:'turndown',preformatted_code:'turndown'},
-            percollate: {inline_images:'percollate',hyphenate:'percollate',fences:'percollate'},
-            mdream: {minimal:'mdream',isolate_main:'mdream',frontmatter:'mdream',clean_urls:'mdream',tailwind:'mdream'},
+            percollate: {inline_images:'percollate',hyphenate:'percollate',fences:'percollate',fence:'percollate',emphasis:'percollate',strong:'percollate',resource_link:'percollate',rule:'percollate'},
+            mdream: {minimal:'mdream',isolate_main:'mdream',frontmatter:'mdream',clean_urls:'mdream',tailwind:'mdream',origin:'mdream',clean_fragments:'mdream',clean_empty_links:'mdream',clean_blank_lines:'mdream',clean_redundant_links:'mdream',clean_self_link_headings:'mdream',clean_empty_images:'mdream',clean_empty_link_text:'mdream',filter_include:'mdream',filter_exclude:'mdream',filter_process_children:'mdream',frontmatter_meta_fields:'mdream',extraction_selectors:'mdream'},
             trafilatura: {favor_precision:'trafilatura',favor_recall:'trafilatura',include_comments:'trafilatura',include_tables:'trafilatura',include_images:'trafilatura',include_formatting:'trafilatura',include_links:'trafilatura',deduplicate:'trafilatura',with_metadata:'trafilatura'},
             html2text_py: {ignore_links:'html2text_py',ignore_images:'html2text_py',ignore_emphasis:'html2text_py',body_width:'html2text_py',unicode_snob:'html2text_py',escape_snob:'html2text_py',inline_links:'html2text_py',google_doc:'html2text_py',dash_unordered_list:'html2text_py'},
-            lightpanda: {strip_js:'lightpanda',strip_css:'lightpanda',strip_ui:'lightpanda',wait_until:'lightpanda',wait_ms:'lightpanda'},
+            markdownify: {strip:'markdownify',convert:'markdownify',autolinks:'markdownify',default_title:'markdownify',heading_style:'markdownify',bullets:'markdownify',strong_em_symbol:'markdownify',sub_symbol:'markdownify',sup_symbol:'markdownify',newline_style:'markdownify',code_language:'markdownify',escape_asterisks:'markdownify',escape_underscores:'markdownify',escape_misc:'markdownify',keep_inline_images_in:'markdownify',table_infer_header:'markdownify',wrap:'markdownify',wrap_width:'markdownify',strip_document:'markdownify',strip_pre:'markdownify',bs4_parser:'markdownify'},
+            lightpanda: {wait_until:'lightpanda',wait_ms:'lightpanda'},
             webclaw: {only_main_content:'webclaw',include_css:'webclaw',exclude_css:'webclaw',format:'webclaw'},
-            e2m: {engine:'e2m'},
-            'html-to-markdown-go': {domain:'html_to_markdown_go',plugins:'html_to_markdown_go'},
+            e2m: {engine:'e2m',langs:'e2m',skip_headers_and_footers:'e2m',include_image_link_in_text:'e2m'},
+            'html-to-markdown-go': {domain:'html_to_markdown_go',plugins:'html_to_markdown_go',include_selector:'html_to_markdown_go',exclude_selector:'html_to_markdown_go'},
         };
 
         let states = {};
@@ -553,12 +624,73 @@
             return Object.values(source).filter(state => state?.enabled !== false).length;
         }
 
+        const MDKA_MODE_DEFAULTS = {
+            balanced: {
+                preserve_ids: true,
+                preserve_classes: false,
+                preserve_data_attrs: false,
+                preserve_aria_attrs: true,
+                preserve_unknown_attrs: false,
+                drop_presentation_attrs: true,
+                drop_interactive_shell: false,
+                unwrap_unknown_wrappers: false,
+            },
+            strict: {
+                preserve_ids: true,
+                preserve_classes: true,
+                preserve_data_attrs: true,
+                preserve_aria_attrs: true,
+                preserve_unknown_attrs: true,
+                drop_presentation_attrs: false,
+                drop_interactive_shell: false,
+                unwrap_unknown_wrappers: false,
+            },
+            minimal: {
+                preserve_ids: false,
+                preserve_classes: false,
+                preserve_data_attrs: false,
+                preserve_aria_attrs: false,
+                preserve_unknown_attrs: false,
+                drop_presentation_attrs: true,
+                drop_interactive_shell: true,
+                unwrap_unknown_wrappers: true,
+            },
+            semantic: {
+                preserve_ids: true,
+                preserve_classes: false,
+                preserve_data_attrs: false,
+                preserve_aria_attrs: true,
+                preserve_unknown_attrs: false,
+                drop_presentation_attrs: true,
+                drop_interactive_shell: false,
+                unwrap_unknown_wrappers: true,
+            },
+            preserve: {
+                preserve_ids: true,
+                preserve_classes: true,
+                preserve_data_attrs: true,
+                preserve_aria_attrs: true,
+                preserve_unknown_attrs: true,
+                drop_presentation_attrs: false,
+                drop_interactive_shell: false,
+                unwrap_unknown_wrappers: false,
+            },
+        };
+
+        function getMdkaDefaultField(field) {
+            const cfg = states.states?.mdka?.config?.mdka || {};
+            const mode = cfg.mode || 'balanced';
+            return MDKA_MODE_DEFAULTS[mode]?.[field];
+        }
+
         function getConfigField(name, field) {
             const cfg = states.states?.[name]?.config || {};
             const configKey = FIELD_MAP[name]?.[field];
             if (!configKey) return undefined;
             if (configKey === field) return cfg[field];
-            return cfg[configKey]?.[field];
+            const value = cfg[configKey]?.[field];
+            if (name === 'mdka' && value === undefined) return getMdkaDefaultField(field);
+            return value;
         }
 
         function setConfigField(name, field, value) {
@@ -595,6 +727,7 @@
             if (name === 'mdream') return structuredClone(cfg.mdream || {});
             if (name === 'trafilatura') return structuredClone(cfg.trafilatura || {});
             if (name === 'html2text-py') return structuredClone(cfg.html2text_py || {});
+            if (name === 'markdownify') return structuredClone(cfg.markdownify || {});
             if (name === 'lightpanda') return structuredClone(cfg.lightpanda || {});
             if (name === 'webclaw') return structuredClone(cfg.webclaw || {});
             if (name === 'e2m') return structuredClone(cfg.e2m || {});
@@ -671,12 +804,18 @@
 
         async function activateLivePreview(extractor, announce = true) {
             if (!activeScore || !extractor) return;
-            if (!activeScore.extractor_results.some(result => result.name === extractor)) {
+            const matchingResult = activeScore.extractor_results.find(result =>
+                result.name === extractor || result.extractor_key === extractor
+            );
+            if (!matchingResult) {
                 setStatus('error', `The opened run does not include ${extractor}.`);
                 return;
             }
-            comparison.left = extractor;
-            comparison.pinnedLeft = extractor;
+            const baselineResult = activeScore.extractor_results.find(result =>
+                result.extractor_key === extractor && /\bbaseline\b/i.test(result.name)
+            ) || matchingResult;
+            comparison.left = baselineResult.name;
+            comparison.pinnedLeft = baselineResult.name;
             comparison.livePreview = {
                 extractor_key: extractor,
                 name: `${extractor} current settings`,
@@ -687,7 +826,7 @@
                 panicked: false
             };
             comparison.livePreviewPending = true;
-            await ensureOutputLoaded(extractor);
+            await ensureOutputLoaded(comparison.left);
             renderComparison();
             await refreshLivePreview(extractor, announce);
         }
@@ -712,8 +851,9 @@
         function renderVariantExtractorOptions() {
             const select = document.getElementById('variantExtractor');
             const current = select.value;
-            select.innerHTML = CONFIGURABLE_EXTRACTORS.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
-            select.value = CONFIGURABLE_EXTRACTORS.includes(current) ? current : CONFIGURABLE_EXTRACTORS[0];
+            const sorted = getSettingsSortedExtractors().filter(name => CONFIGURABLE_EXTRACTORS.includes(name));
+            select.innerHTML = sorted.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+            select.value = sorted.includes(current) ? current : sorted[0];
         }
 
         function renderConfigField(name, field) {
@@ -736,7 +876,7 @@
                 const resolved = Number.isFinite(value) ? value : '';
                 return `<div class="config-field">
                     <label for="${name}-${field.name}">${escapeHtml(field.name)}</label>
-                    <input id="${name}-${field.name}" type="number" value="${resolved}" oninput="updateConfig('${name}','${field.name}',this.value === '' ? null : parseInt(this.value, 10), true)">
+                    <input id="${name}-${field.name}" type="number" ${field.float ? 'step="any"' : ''} value="${resolved}" oninput="updateConfig('${name}','${field.name}',this.value === '' ? null : ${field.float ? 'parseFloat(this.value)' : 'parseInt(this.value, 10)'}, true)">
                 </div>`;
             }
             return `<div class="config-field">
@@ -745,9 +885,8 @@
             </div>`;
         }
 
-        function renderExtractors() {
-            const el = document.getElementById('extractors');
-            const sorted = [...EXTRACTORS].sort((a, b) => {
+        function getSettingsSortedExtractors() {
+            return [...EXTRACTORS].sort((a, b) => {
                 const sa = states.states?.[a] || { enabled: true, config: {} };
                 const sb = states.states?.[b] || { enabled: true, config: {} };
                 const fa = (CONFIG_FIELDS[a] || []).length;
@@ -757,6 +896,11 @@
                 if (sa.enabled && !sb.enabled) return -1;
                 return 1;
             });
+        }
+
+        function renderExtractors() {
+            const el = document.getElementById('extractors');
+            const sorted = getSettingsSortedExtractors();
             el.innerHTML = sorted.map(name => {
                 const state = states.states?.[name] || { enabled: true, config: {} };
                 const fields = CONFIG_FIELDS[name] || [];
@@ -781,7 +925,7 @@
         }
 
         async function updateConfig(name, key, value, defer = false) {
-            if (key === 'skip_tags' || key === 'ignore_tags') {
+            if (key === 'skip_tags' || key === 'ignore_tags' || key === 'plugins' || key === 'classes_to_preserve' || key === 'filter_include' || key === 'filter_exclude' || key === 'frontmatter_meta_fields' || key === 'extraction_selectors' || key === 'langs') {
                 value = String(value || '').split(',').map(part => part.trim()).filter(Boolean);
             }
             setConfigField(name, key, value);
@@ -846,11 +990,16 @@
                 status.innerHTML = '<div class="error">Open a saved run first so the app has a baseline to compare against.</div>';
                 return;
             }
+            if (!activeScore.extractor_results.some(result => result.name === extractor || result.extractor_key === extractor)) {
+                status.innerHTML = `<div class="error">The opened run does not include ${escapeHtml(extractor)}. Open a run that saved this extractor first.</div>`;
+                return;
+            }
             btn.disabled = true;
-            status.innerHTML = `<div class="loading">Comparing saved ${escapeHtml(extractor)} settings against the current editor state...</div>`;
+            status.innerHTML = `<div class="loading">Starting live settings preview for ${escapeHtml(extractor)}...</div>`;
             try {
                 await activateLivePreview(extractor, false);
-                status.innerHTML = `<div class="success">${escapeHtml(extractor)} settings preview opened in the current comparison view.</div>`;
+                setFullscreen(false);
+                status.innerHTML = `<div class="success">${escapeHtml(extractor)} preview is live on the right. Changing settings will rerun it in place.</div>`;
             } catch (e) {
                 status.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
             } finally {
@@ -939,8 +1088,11 @@
 
         async function ensureOutputLoaded(name) {
             if (!activeScore || !name || activeOutputs[name] !== undefined) return;
-            const res = await fetch(`/scores/${activeScore.id}/output/${name}`);
-            activeOutputs[name] = await res.text();
+            const res = await fetch(`/scores/${activeScore.id}/output/${encodeURIComponent(name)}`);
+            const text = await res.text();
+            activeOutputs[name] = res.ok
+                ? text
+                : `[ERROR] failed to load output for ${name}: ${text || res.statusText}`;
         }
 
         async function setLeftReference(name, pin) {
@@ -1300,86 +1452,6 @@
             const currentIndex = Math.max(candidates.indexOf(comparison.right), 0);
             const nextIndex = (currentIndex + delta + candidates.length) % candidates.length;
             await setRightComparison(candidates[nextIndex]);
-        }
-
-        function renderComparison() {
-            const root = document.getElementById('comparisonRoot');
-            if (!activeScore) {
-                root.innerHTML = '<div class="compare-empty">No extraction selected yet.</div>';
-                setSummaryCounts();
-                return;
-            }
-
-            const leftResult = activeScore.extractor_results.find(result => result.name === comparison.left) || null;
-            const rightResult = activeScore.extractor_results.find(result => result.name === comparison.right) || null;
-            const diff = buildAlignedDiff(activeOutputs[comparison.left] ?? '', activeOutputs[comparison.right] ?? '');
-
-            document.getElementById('compareMeta').textContent =
-                `${activeScore.url} • ${formatTime(activeScore.timestamp)} • ${formatBytes(activeScore.html_size)} source • ${activeScore.extractor_results.length} results saved`;
-            document.getElementById('deleteBtn').disabled = false;
-            document.getElementById('swapBtn').disabled = !(leftResult && rightResult);
-            document.getElementById('fullscreenBtn').disabled = false;
-            document.getElementById('fullscreenBtn').textContent = comparison.fullscreen ? 'Exit Fullscreen' : 'Fullscreen';
-
-            root.innerHTML = `
-                <div class="compare-meta-row">
-                    <div class="compare-meta-card">
-                        <strong>${escapeHtml(leftResult?.name || 'None')}</strong>
-                        <span>${leftResult ? `${formatBytes(leftResult.output_size)} • ${leftResult.reduction_percent.toFixed(1)}% smaller • ${formatMicros(leftResult.time_micros)}${activeScore.grades?.[leftResult.name] !== undefined ? ` • grade ${activeScore.grades[leftResult.name]}` : ''}` : 'No left selection'}</span>
-                    </div>
-                    <div class="compare-meta-card">
-                        <strong>${escapeHtml(rightResult?.name || 'None')}</strong>
-                        <span>${rightResult ? `${formatBytes(rightResult.output_size)} • ${rightResult.reduction_percent.toFixed(1)}% smaller • ${formatMicros(rightResult.time_micros)}${activeScore.grades?.[rightResult.name] !== undefined ? ` • grade ${activeScore.grades[rightResult.name]}` : ''}` : 'No right selection'}</span>
-                    </div>
-                </div>
-
-                <div class="compare-controls">
-                    <select onchange="setLeftReference(this.value, comparison.pinnedLeft === this.value)">
-                        ${activeScore.extractor_results.map(result => `<option value="${escapeHtml(result.name)}" ${result.name === comparison.left ? 'selected' : ''}>${escapeHtml(result.name)}</option>`).join('')}
-                    </select>
-                    <select onchange="setRightComparison(this.value)">
-                        ${activeScore.extractor_results.filter(result => result.name !== comparison.left).map(result => `<option value="${escapeHtml(result.name)}" ${result.name === comparison.right ? 'selected' : ''}>${escapeHtml(result.name)}</option>`).join('')}
-                    </select>
-                    <button class="${comparison.pinnedLeft === comparison.left ? '' : 'secondary'}" onclick="togglePinCurrentLeft()">${comparison.pinnedLeft === comparison.left ? 'Pinned Left' : 'Pin Left'}</button>
-                </div>
-
-                <div class="right-selector">
-                    ${activeScore.extractor_results.filter(result => result.name !== comparison.left).map(result => `
-                        <button class="selector-pill ${result.name === comparison.right ? 'active' : ''}" onclick="setRightComparison('${result.name}')">
-                            ${escapeHtml(result.name)}
-                            ${activeScore.grades?.[result.name] !== undefined ? `<span class="grade">${activeScore.grades[result.name]}</span>` : ''}
-                        </button>
-                    `).join('')}
-                </div>
-
-                <div class="diff-summary">
-                    <span class="diff-badge">${diff.summary.same} same</span>
-                    <span class="diff-badge">${diff.summary.changed} changed</span>
-                    <span class="diff-badge">${diff.summary.added} added</span>
-                    <span class="diff-badge">${diff.summary.removed} removed</span>
-                    <span class="diff-badge">${diff.summary.collapsed} collapsed</span>
-                </div>
-
-                <div class="diff-wrap">
-                    <div class="diff-header">
-                        <div class="diff-pane-header">
-                            <strong>${escapeHtml(leftResult?.name || 'None')}</strong>
-                            <span>${comparison.pinnedLeft === comparison.left ? 'Pinned reference' : 'Reference candidate'}</span>
-                        </div>
-                        <div class="diff-pane-header">
-                            <strong>${escapeHtml(rightResult?.name || 'None')}</strong>
-                            <span>Use number keys to grade the right side</span>
-                        </div>
-                    </div>
-                    <div class="diff-grid">
-                        <div class="diff-pane" id="leftDiffPane">${renderDiffPane(diff.left)}</div>
-                        <div class="diff-pane" id="rightDiffPane">${renderDiffPane(diff.right)}</div>
-                    </div>
-                </div>
-            `;
-
-            bindScrollSync();
-            setSummaryCounts();
         }
 
         async function handleRightSelection(value) {

@@ -60,7 +60,8 @@ async fn main() {
 
         #[cfg(feature = "readability")]
         {
-            runner.run("readability", |html| {
+            let url = url.clone();
+            runner.run("readability", move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
                 readability::extractor::extract(&mut html, &url)
                     .unwrap()
@@ -70,7 +71,8 @@ async fn main() {
 
         #[cfg(feature = "llm_readability")]
         {
-            runner.run("llm_readability", |html| {
+            let url = url.clone();
+            runner.run("llm_readability", move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
                 llm_readability::extractor::extract(&mut html, &url)
                     .unwrap()
@@ -128,7 +130,8 @@ async fn main() {
 
         #[cfg(feature = "readable-readability")]
         {
-            runner.run("readable-readability", |html| {
+            let url = url.clone();
+            runner.run("readable-readability", move |html| {
                 let mut parser = readable_readability::Readability::new();
                 parser.base_url(url.clone());
                 let (node, _metadata) = parser.parse(&html);
@@ -178,35 +181,89 @@ async fn main() {
         #[cfg(feature = "mdream")]
         {
             use mdream::types::HTMLToMarkdownOptions;
-            runner.run("mdream", |html| mdream::html_to_markdown(html, HTMLToMarkdownOptions::default()));
+            runner.run("mdream", |html| {
+                mdream::html_to_markdown(html, HTMLToMarkdownOptions::default())
+            });
         }
 
-{
+        {
             use scores::run_cli_extractor;
             let placeholder = url::Url::parse("https://placeholder.example.com").unwrap();
-            runner.run("turndown", |html| {
-                run_cli_extractor("turndown", html, &ExtractorStates::default(), &placeholder)
+            let placeholder_turndown = placeholder.clone();
+            runner.run("turndown", move |html| {
+                run_cli_extractor(
+                    "turndown",
+                    html,
+                    &ExtractorStates::default(),
+                    &placeholder_turndown,
+                )
             });
-            runner.run("percollate", |html| {
-                run_cli_extractor("percollate", html, &ExtractorStates::default(), &placeholder)
+            let placeholder_percollate = placeholder.clone();
+            runner.run("percollate", move |html| {
+                run_cli_extractor(
+                    "percollate",
+                    html,
+                    &ExtractorStates::default(),
+                    &placeholder_percollate,
+                )
             });
-            runner.run("trafilatura", |html| {
-                run_cli_extractor("trafilatura", html, &ExtractorStates::default(), &placeholder)
+            let placeholder_trafilatura = placeholder.clone();
+            runner.run("trafilatura", move |html| {
+                run_cli_extractor(
+                    "trafilatura",
+                    html,
+                    &ExtractorStates::default(),
+                    &placeholder_trafilatura,
+                )
             });
-            runner.run("html2text-py", |html| {
-                run_cli_extractor("html2text-py", html, &ExtractorStates::default(), &placeholder)
+            let placeholder_html2text_py = placeholder.clone();
+            runner.run("html2text-py", move |html| {
+                run_cli_extractor(
+                    "html2text-py",
+                    html,
+                    &ExtractorStates::default(),
+                    &placeholder_html2text_py,
+                )
             });
-            runner.run("lightpanda", |_html| {
-                run_cli_extractor("lightpanda", "", &ExtractorStates::default(), &url)
+            let placeholder_markdownify = placeholder.clone();
+            runner.run("markdownify", move |html| {
+                run_cli_extractor(
+                    "markdownify",
+                    html,
+                    &ExtractorStates::default(),
+                    &placeholder_markdownify,
+                )
             });
-            runner.run("webclaw", |html| {
-                run_cli_extractor("webclaw", html, &ExtractorStates::default(), &placeholder)
+            let lightpanda_url = url.clone();
+            runner.run("lightpanda", move |_html| {
+                run_cli_extractor(
+                    "lightpanda",
+                    "",
+                    &ExtractorStates::default(),
+                    &lightpanda_url,
+                )
             });
-            runner.run("e2m", |html| {
-                run_cli_extractor("e2m", html, &ExtractorStates::default(), &placeholder)
+            let placeholder_webclaw = placeholder.clone();
+            runner.run("webclaw", move |html| {
+                run_cli_extractor(
+                    "webclaw",
+                    html,
+                    &ExtractorStates::default(),
+                    &placeholder_webclaw,
+                )
             });
-            runner.run("html-to-markdown-go", |html| {
-                run_cli_extractor("html-to-markdown-go", html, &ExtractorStates::default(), &url)
+            let placeholder_e2m = placeholder.clone();
+            runner.run("e2m", move |html| {
+                run_cli_extractor("e2m", html, &ExtractorStates::default(), &placeholder_e2m)
+            });
+            let html_to_markdown_go_url = url.clone();
+            runner.run("html-to-markdown-go", move |html| {
+                run_cli_extractor(
+                    "html-to-markdown-go",
+                    html,
+                    &ExtractorStates::default(),
+                    &html_to_markdown_go_url,
+                )
             });
         }
 
@@ -214,7 +271,8 @@ async fn main() {
         {
             let jina_api_key =
                 std::env::var("JINA_API_KEY").expect("Must set JINA_API_KEY environment variable");
-            runner.run("reader-lm-api", |_html| {
+            let url = url.clone();
+            runner.run("reader-lm-api", move |_html| {
                 let response = ureq::get(&format!("https://r.jina.ai/{}", url))
                     .set("authorization", &format!("Bearer {}", jina_api_key))
                     .call()

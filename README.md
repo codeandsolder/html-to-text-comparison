@@ -1,6 +1,6 @@
 # Rust HTML to Text Comparison
 
-This compares various Rust crates for extracting text from HTML:
+This compares various HTML-to-text and HTML-to-Markdown tools:
 
 - [august](https://crates.io/crates/august) ![august](https://img.shields.io/crates/d/august)
 - [boilerpipe](https://crates.io/crates/boilerpipe) ![boilerpipe](https://img.shields.io/crates/d/boilerpipe)
@@ -11,6 +11,7 @@ This compares various Rust crates for extracting text from HTML:
 - [html2md-rs](https://crates.io/crates/html2md-rs) ![html2md-rs](https://img.shields.io/crates/d/html2md-rs)
 - [html2text](https://crates.io/crates/html2text) ![html2text](https://img.shields.io/crates/d/html2text)
 - [llm_readability](https://crates.io/crates/llm_readability) ![llm_readability](https://img.shields.io/crates/d/llm_readability)
+- [markdownify](https://github.com/matthewwithanm/python-markdownify)
 - [mdka](https://crates.io/crates/mdka) ![mdka](https://img.shields.io/crates/d/mdka)
 - [nanohtml2text](https://crates.io/crates/nanohtml2text) ![nanohtml2text](https://img.shields.io/crates/d/nanohtml2text)
 - [readability](https://crates.io/crates/readability) ![readability](https://img.shields.io/crates/d/readability)
