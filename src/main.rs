@@ -3,6 +3,11 @@ mod runner;
 mod scores;
 mod web;
 
+use extractor_config::ExtractorStates;
+
+#[allow(unused_imports)]
+use scores::run_cli_extractor;
+
 use std::path::PathBuf;
 use std::process::exit;
 
@@ -168,6 +173,41 @@ async fn main() {
         #[cfg(feature = "html2md")]
         {
             runner.run("html2md", |html| html2md::parse_html(html));
+        }
+
+        #[cfg(feature = "mdream")]
+        {
+            use mdream::types::HTMLToMarkdownOptions;
+            runner.run("mdream", |html| mdream::html_to_markdown(html, HTMLToMarkdownOptions::default()));
+        }
+
+{
+            use scores::run_cli_extractor;
+            let placeholder = url::Url::parse("https://placeholder.example.com").unwrap();
+            runner.run("turndown", |html| {
+                run_cli_extractor("turndown", html, &ExtractorStates::default(), &placeholder)
+            });
+            runner.run("percollate", |html| {
+                run_cli_extractor("percollate", html, &ExtractorStates::default(), &placeholder)
+            });
+            runner.run("trafilatura", |html| {
+                run_cli_extractor("trafilatura", html, &ExtractorStates::default(), &placeholder)
+            });
+            runner.run("html2text-py", |html| {
+                run_cli_extractor("html2text-py", html, &ExtractorStates::default(), &placeholder)
+            });
+            runner.run("lightpanda", |_html| {
+                run_cli_extractor("lightpanda", "", &ExtractorStates::default(), &url)
+            });
+            runner.run("webclaw", |html| {
+                run_cli_extractor("webclaw", html, &ExtractorStates::default(), &placeholder)
+            });
+            runner.run("e2m", |html| {
+                run_cli_extractor("e2m", html, &ExtractorStates::default(), &placeholder)
+            });
+            runner.run("html-to-markdown-go", |html| {
+                run_cli_extractor("html-to-markdown-go", html, &ExtractorStates::default(), &url)
+            });
         }
 
         #[cfg(feature = "reader-lm-api")]

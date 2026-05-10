@@ -34,6 +34,17 @@ pub struct ExtractorResult {
     pub output_file: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractorPreview {
+    pub name: String,
+    pub extractor_key: String,
+    pub output: String,
+    pub output_size: usize,
+    pub reduction_percent: f64,
+    pub time_micros: u64,
+    pub panicked: bool,
+}
+
 impl Score {
     pub fn new(url: String, html: String, states: &ExtractorStates) -> Self {
         let id = Uuid::new_v4().to_string();
@@ -127,9 +138,23 @@ fn run_named_extractor(
         }
         #[cfg(feature = "html2text")]
         "html2text" => {
-            runner.run(output_name, |html| {
+            let cfg = states
+                .states
+                .get("html2text")
+                .map(|s| s.config.html2text.clone())
+                .unwrap_or_default();
+            runner.run(output_name, move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
-                html2text::from_read(&mut html, 1000).unwrap_or_default()
+                let width = cfg.max_wrap_width.max(1);
+                let mut render = html2text::config::plain()
+                    .max_wrap_width(width)
+                    .raw_mode(cfg.raw_mode);
+                if cfg.no_link_wrapping {
+                    render = render.no_link_wrapping();
+                }
+                render
+                    .string_from_read(&mut html, width)
+                    .unwrap_or_default()
             });
         }
         #[cfg(feature = "htmd")]
@@ -139,21 +164,27 @@ fn run_named_extractor(
                 .get("htmd")
                 .map(|s| s.config.htmd.clone())
                 .unwrap_or_default();
-            let global_skip_tags = states
+            let legacy_skip_tags = states
                 .states
                 .get("htmd")
                 .map(|s| s.config.skip_tags.clone())
                 .unwrap_or_default();
+            let skip_tags = if cfg.skip_tags.is_empty() {
+                legacy_skip_tags
+            } else {
+                cfg.skip_tags.clone()
+            };
             runner.run(output_name, move |html| {
-                htmd::HtmlToMarkdown::builder()
-                    .skip_tags(if global_skip_tags.is_empty() {
-                        cfg.skip_tags.iter().map(|s| s.as_str()).collect()
-                    } else {
-                        global_skip_tags.iter().map(|s| s.as_str()).collect()
-                    })
-                    .build()
-                    .convert(html)
-                    .unwrap_or_default()
+                let mut options = htmd::options::Options::default();
+                options.heading_style = match cfg.heading_style.as_str() {
+                    "setex" => htmd::options::HeadingStyle::Setex,
+                    _ => htmd::options::HeadingStyle::Atx,
+                };
+                let mut builder = htmd::HtmlToMarkdown::builder().options(options);
+                if !skip_tags.is_empty() {
+                    builder = builder.skip_tags(skip_tags.iter().map(|s| s.as_str()).collect());
+                }
+                builder.build().convert(html).unwrap_or_default()
             });
         }
         #[cfg(feature = "html2md-rs")]
@@ -163,19 +194,19 @@ fn run_named_extractor(
                 .get("html2md-rs")
                 .map(|s| s.config.html2md_rs.clone())
                 .unwrap_or_default();
-            let global_skip_tags = states
+            let legacy_skip_tags = states
                 .states
                 .get("html2md-rs")
                 .map(|s| s.config.skip_tags.clone())
                 .unwrap_or_default();
+            let tags = if cfg.ignore_tags.is_empty() {
+                legacy_skip_tags
+            } else {
+                cfg.ignore_tags.clone()
+            };
             runner.run(output_name, move |html| {
                 use html2md_rs::structs::{NodeType, ToMdConfig};
                 use html2md_rs::to_md::safe_from_html_to_md_with_config;
-                let tags = if global_skip_tags.is_empty() {
-                    cfg.ignore_tags.clone()
-                } else {
-                    global_skip_tags.clone()
-                };
                 safe_from_html_to_md_with_config(
                     html.to_string(),
                     &ToMdConfig {
@@ -259,7 +290,56 @@ fn run_named_extractor(
         "html2md" => {
             runner.run(output_name, |html| html2md::parse_html(html));
         }
-        _ => {}
+        #[cfg(feature = "mdream")]
+        "mdream" => {
+            runner.run(output_name, |html| {
+                use mdream::{html_to_markdown, types::{HTMLToMarkdownOptions, CleanConfig, PluginConfig, FilterConfig, IsolateMainConfig, FrontmatterConfig, TailwindConfig}};
+                let cfg = states
+                    .states
+                    .get("mdream")
+                    .map(|s| s.config.mdream.clone())
+                    .unwrap_or_default();
+                let mut opts = HTMLToMarkdownOptions::default();
+                opts.clean_urls = cfg.clean_urls;
+                if cfg.clean_urls {
+                    opts.clean = Some(CleanConfig {
+                        urls: true,
+                        ..Default::default()
+                    });
+                }
+                if cfg.minimal || cfg.isolate_main || cfg.frontmatter || cfg.tailwind {
+                    let mut plugins = PluginConfig::default();
+                    if cfg.minimal {
+                        plugins.filter = Some(FilterConfig {
+                            exclude: Some(vec![
+                                "nav".to_string(),
+                                "footer".to_string(),
+                                "aside".to_string(),
+                                "form".to_string(),
+                            ]),
+                            ..Default::default()
+                        });
+                    }
+                    if cfg.isolate_main {
+                        plugins.isolate_main = Some(IsolateMainConfig::default());
+                    }
+                    if cfg.frontmatter {
+                        plugins.frontmatter = Some(FrontmatterConfig::default());
+                    }
+                    if cfg.tailwind {
+                        plugins.tailwind = Some(TailwindConfig::default());
+                    }
+                    opts.plugins = Some(plugins);
+                }
+                html_to_markdown(html, opts)
+            });
+        }
+        _ => {
+            let extractor_key = extractor_key.to_string();
+            runner.run(output_name, move |html| {
+                run_cli_extractor(&extractor_key, html, states, parsed_url)
+            });
+        }
     }
 }
 
@@ -338,6 +418,38 @@ pub fn compare_single_extractor_settings(
     score
 }
 
+pub fn preview_single_extractor_settings(
+    url: &str,
+    html: &str,
+    extractor: &str,
+    config: crate::extractor_config::ExtractorConfig,
+) -> ExtractorPreview {
+    let states = single_extractor_state(extractor, config);
+    let parsed_url =
+        url::Url::parse(url).expect("preview_single_extractor_settings requires a valid URL");
+    let html_size = html.len();
+    let out_dir = PathBuf::from("/tmp/html-extract-preview").join(Uuid::new_v4().to_string());
+    let _ = fs::create_dir_all(&out_dir);
+
+    let mut runner = Runner::new(out_dir.clone(), html.to_string());
+    run_named_extractor(&mut runner, &states, &parsed_url, extractor, extractor);
+
+    let stat = runner.into_stats().into_iter().next().unwrap_or_default();
+    let output =
+        std::fs::read_to_string(out_dir.join(format!("{extractor}.txt"))).unwrap_or_default();
+    let _ = fs::remove_dir_all(&out_dir);
+
+    ExtractorPreview {
+        name: format!("{extractor} current settings"),
+        extractor_key: extractor.to_string(),
+        output_size: stat.output_size,
+        reduction_percent: 100.0 - (stat.output_size as f64 / html_size as f64) * 100.0,
+        time_micros: stat.time_micros,
+        panicked: stat.panicked,
+        output,
+    }
+}
+
 fn single_extractor_state(
     extractor: &str,
     config: crate::extractor_config::ExtractorConfig,
@@ -369,6 +481,387 @@ fn chrono_lite_now() -> String {
         .unwrap()
         .as_secs();
     format!("{}", now)
+}
+
+pub(crate) fn run_cli_extractor(
+    extractor_key: &str,
+    html: &str,
+    states: &ExtractorStates,
+    parsed_url: &url::Url,
+) -> String {
+    match extractor_key {
+        "turndown" => run_turndown(html),
+        "percollate" => run_percollate(html),
+        "trafilatura" => run_trafilatura(html),
+        "html2text-py" => run_html2text_py(html),
+        "lightpanda" => run_lightpanda(parsed_url),
+        "webclaw" => run_webclaw(html, states),
+        "e2m" => run_e2m(html, states),
+        "html-to-markdown-go" => run_html_to_markdown_go(html, parsed_url),
+        _ => String::new(),
+    }
+}
+
+fn run_turndown(html: &str) -> String {
+    let tmp = std::env::temp_dir().join(format!("turndown_{}.html", uuid::Uuid::new_v4()));
+    let _ = std::fs::write(&tmp, html);
+    let node_code = r#"const fs = require('fs'); const td = require('/home/jan/git/turndown'); const svc = new td(); const html = fs.readFileSync(process.argv[1], 'utf8'); process.stdout.write(svc.turndown(html))"#;
+    let out = std::process::Command::new("node")
+        .args(["-e", node_code, tmp.to_str().unwrap()])
+        .output();
+
+    let _ = std::fs::remove_file(&tmp);
+    match out {
+        Ok(o) => {
+            if !o.status.success() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] turndown failed (exit {}): {}\n", o.status, stderr.trim());
+            }
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if stdout.is_empty() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] turndown returned empty output. stderr: {}\n", stderr.trim());
+            }
+            stdout.to_string()
+        }
+        Err(e) => format!("[ERROR] node failed: {}\n", e),
+    }
+}
+
+fn run_percollate(html: &str) -> String {
+    let tmp = std::env::temp_dir().join(format!("percollate_in_{}.html", uuid::Uuid::new_v4()));
+    let _ = std::fs::write(&tmp, html);
+    let out = std::process::Command::new("node")
+        .args(["/home/jan/git/percollate/cli.js", "md", "-o", "-", tmp.to_str().unwrap()])
+        .output();
+
+    let _ = std::fs::remove_file(&tmp);
+    match out {
+        Ok(o) => {
+            if !o.status.success() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] percollate failed (exit {}): {}\n", o.status, stderr.trim());
+            }
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if stdout.is_empty() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] percollate returned empty output. stderr: {}\n", stderr.trim());
+            }
+            stdout.to_string()
+        }
+        Err(e) => format!("[ERROR] percollate failed: {}\n", e),
+    }
+}
+
+fn run_trafilatura(html: &str) -> String {
+    let tmp = std::env::temp_dir().join(format!("trafilatura_{}.html", uuid::Uuid::new_v4()));
+    let _ = std::fs::write(&tmp, html);
+    let out = std::process::Command::new("uv")
+        .args(["run", "--", "python3", "-c", "import trafilatura; import sys; html=open(sys.argv[1]).read(); result=trafilatura.extract(html, output_format='markdown', include_links=True); print(result if result else '', end='')"])
+        .arg(tmp.to_str().unwrap())
+        .output();
+
+    let _ = std::fs::remove_file(&tmp);
+    match out {
+        Ok(o) => {
+            if !o.status.success() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] trafilatura failed (exit {}): {}\n", o.status, stderr.trim());
+            }
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if stdout.is_empty() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] trafilatura returned empty output. stderr: {}\n", stderr.trim());
+            }
+            stdout.to_string()
+        }
+        Err(e) => format!("[ERROR] uv failed: {}\n", e),
+    }
+}
+
+fn run_html2text_py(html: &str) -> String {
+    let tmp = std::env::temp_dir().join(format!("h2t_py_{}.html", uuid::Uuid::new_v4()));
+    let _ = std::fs::write(&tmp, html);
+    let out = std::process::Command::new("uv")
+        .args(["run", "--", "python3", "-c", "from html2text import HTML2Text; import sys; h=HTML2Text(); h.ignore_links=False; h.ignore_images=False; h.body_width=78; html=open(sys.argv[1]).read(); print(h.handle(html), end='')"])
+        .arg(tmp.to_str().unwrap())
+        .output();
+
+    let _ = std::fs::remove_file(&tmp);
+    match out {
+        Ok(o) => {
+            if !o.status.success() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] html2text.py failed (exit {}): {}\n", o.status, stderr.trim());
+            }
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if stdout.is_empty() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] html2text.py returned empty output. stderr: {}\n", stderr.trim());
+            }
+            stdout.to_string()
+        }
+        Err(e) => format!("[ERROR] uv failed: {}\n", e),
+    }
+}
+
+fn run_lightpanda(parsed_url: &url::Url) -> String {
+    let out = std::process::Command::new("docker")
+        .args([
+            "exec", "lightpanda", "lightpanda", "fetch",
+            "--dump", "markdown",
+            parsed_url.to_string().as_str(),
+        ])
+        .output();
+
+    match out {
+        Ok(o) => {
+            if !o.status.success() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] lightpanda docker exec failed (exit {}): {}\n", o.status, stderr.trim());
+            }
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if stdout.is_empty() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] lightpanda returned empty output. stderr: {}\n", stderr.trim());
+            }
+            stdout.to_string()
+        }
+        Err(e) => format!("[ERROR] docker exec lightpanda failed: {}\n", e),
+    }
+}
+
+fn run_webclaw(html: &str, states: &ExtractorStates) -> String {
+    let cfg = states
+        .states
+        .get("webclaw")
+        .map(|s| s.config.webclaw.clone())
+        .unwrap_or_default();
+    let tmp = std::env::temp_dir().join(format!("webclaw_{}.html", uuid::Uuid::new_v4()));
+    let _ = std::fs::write(&tmp, html);
+    let mut args = vec!["--file".to_string(), tmp.to_string_lossy().to_string()];
+    if cfg.only_main_content {
+        args.push("--only-main-content".to_string());
+    }
+    if !cfg.include_css.is_empty() {
+        args.push("--include".to_string());
+        args.push(cfg.include_css.clone());
+    }
+    if !cfg.exclude_css.is_empty() {
+        args.push("--exclude".to_string());
+        args.push(cfg.exclude_css.clone());
+    }
+    args.push("-f".to_string());
+    args.push(if cfg.format.is_empty() { "markdown".to_string() } else { cfg.format.clone() });
+    let bin = std::path::Path::new("/home/jan/git/webclaw/webclaw_bin");
+    let out = if bin.exists() {
+        std::process::Command::new(bin).args(&args).output()
+    } else {
+        std::process::Command::new("webclaw").args(&args).output()
+    };
+
+    let _ = std::fs::remove_file(&tmp);
+    match out {
+        Ok(o) => {
+            if !o.status.success() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] webclaw failed (exit {}): {}\n", o.status, stderr.trim());
+            }
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if stdout.is_empty() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] webclaw returned empty output. stderr: {}\n", stderr.trim());
+            }
+            stdout.to_string()
+        }
+        Err(e) => format!("[ERROR] webclaw not found: {}\n", e),
+    }
+}
+
+fn run_e2m(html: &str, states: &ExtractorStates) -> String {
+    let cfg = states
+        .states
+        .get("e2m")
+        .map(|s| s.config.e2m.clone())
+        .unwrap_or_default();
+    let engine = if cfg.engine.is_empty() { "unstructured" } else { &cfg.engine };
+    let tmp = std::env::temp_dir().join(format!("e2m_{}.html", uuid::Uuid::new_v4()));
+    let _ = std::fs::write(&tmp, html);
+    let out = std::process::Command::new("uv")
+        .args(["run", "--", "python3", "-c", &format!(
+            "import sys; from wisup_e2m import HtmlParser; p=HtmlParser(engine='{}'); result=p.parse(text=open(sys.argv[1]).read(), include_image_link_in_text=False); print(result.text, end='')",
+            engine
+        ), tmp.to_str().unwrap()])
+        .output();
+
+    let _ = std::fs::remove_file(&tmp);
+    match out {
+        Ok(o) => {
+            if !o.status.success() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] e2m failed (exit {}): {}\n", o.status, stderr.trim());
+            }
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if stdout.is_empty() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return format!("[ERROR] e2m returned empty output. stderr: {}\n", stderr.trim());
+            }
+            stdout.to_string()
+        }
+        Err(e) => format!("[ERROR] uv failed: {}\n", e),
+    }
+}
+
+fn run_html_to_markdown_go(html: &str, parsed_url: &url::Url) -> String {
+    let domain = parsed_url.origin().ascii_serialization();
+    let out = std::process::Command::new("/tmp/html2markdown")
+        .arg(format!("--domain={}", domain))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+
+    match out {
+        Ok(mut child) => {
+            use std::io::Write;
+            if let Some(ref mut stdin) = child.stdin {
+                stdin.write_all(html.as_bytes()).ok();
+            }
+            let result = child.wait_with_output();
+
+            match result {
+                Ok(o) => {
+                    if !o.status.success() {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        return format!("[ERROR] html-to-markdown-go failed (exit {}): {}\n", o.status, stderr.trim());
+                    }
+                    let stdout = String::from_utf8_lossy(&o.stdout);
+                    if stdout.is_empty() {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        return format!("[ERROR] html-to-markdown-go returned empty output. stderr: {}\n", stderr.trim());
+                    }
+                    stdout.to_string()
+                }
+                Err(e) => format!("[ERROR] html-to-markdown-go wait failed: {}\n", e),
+            }
+        }
+        Err(e) => format!("[ERROR] html2markdown spawn failed: {}\n", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extractor_config::{ExtractorConfig, HtmdConfig, Html2TextConfig};
+
+    fn test_store() -> (ScoreStore, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("html-to-text-comparison-tests-{}", Uuid::new_v4()));
+        (ScoreStore::new(dir.clone()), dir)
+    }
+
+    #[test]
+    fn compare_settings_applies_html2text_config() {
+        let (store, dir) = test_store();
+        let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
+        let baseline = ExtractorConfig {
+            html2text: Html2TextConfig {
+                max_wrap_width: 12,
+                raw_mode: false,
+                no_link_wrapping: false,
+            },
+            ..Default::default()
+        };
+        let candidate = ExtractorConfig {
+            html2text: Html2TextConfig {
+                max_wrap_width: 120,
+                raw_mode: false,
+                no_link_wrapping: false,
+            },
+            ..Default::default()
+        };
+
+        let score = compare_single_extractor_settings(
+            "https://example.com",
+            html,
+            "html2text",
+            baseline,
+            candidate,
+            &store,
+        );
+
+        let baseline_output =
+            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
+        let candidate_output =
+            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+
+        assert_ne!(baseline_output, candidate_output);
+        assert!(baseline_output.matches('\n').count() > candidate_output.matches('\n').count());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn compare_settings_applies_htmd_heading_style() {
+        let (store, dir) = test_store();
+        let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
+        let baseline = ExtractorConfig {
+            htmd: HtmdConfig {
+                skip_tags: Vec::new(),
+                heading_style: "atx".to_string(),
+            },
+            ..Default::default()
+        };
+        let candidate = ExtractorConfig {
+            htmd: HtmdConfig {
+                skip_tags: Vec::new(),
+                heading_style: "setex".to_string(),
+            },
+            ..Default::default()
+        };
+
+        let score = compare_single_extractor_settings(
+            "https://example.com",
+            html,
+            "htmd",
+            baseline,
+            candidate,
+            &store,
+        );
+
+        let baseline_output =
+            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
+        let candidate_output =
+            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+
+        assert!(baseline_output.contains("# Title"));
+        assert!(candidate_output.contains("Title\n====="));
+        assert_ne!(baseline_output, candidate_output);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn preview_single_extractor_returns_current_output() {
+        let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
+        let preview = preview_single_extractor_settings(
+            "https://example.com",
+            html,
+            "html2text",
+            ExtractorConfig {
+                html2text: Html2TextConfig {
+                    max_wrap_width: 12,
+                    raw_mode: false,
+                    no_link_wrapping: false,
+                },
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(preview.extractor_key, "html2text");
+        assert!(preview.output.contains("alpha beta"));
+        assert!(preview.output.matches('\n').count() > 1);
+    }
 }
 
 #[derive(Clone)]

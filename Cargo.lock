@@ -854,6 +854,7 @@ dependencies = [
  "html2text",
  "llm_readability",
  "mdka",
+ "mdream",
  "nanohtml2text",
  "readability",
  "readable-readability",
@@ -1582,6 +1583,12 @@ dependencies = [
  "scraper 0.26.0",
  "thiserror 2.0.18",
 ]
+
+[[package]]
+name = "mdream"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "901269f271f4afceb9d0ecab35b81c83a9a7fab4be5f9b26a12057f4a22ffb9b"
 
 [[package]]
 name = "memchr"

@@ -44,6 +44,7 @@ pub async fn start_server(port: u16, data_dir: PathBuf) -> Result<(), String> {
         .route("/scores/{id}", delete(delete_score))
         .route("/scores/{id}/grade", patch(update_grade))
         .route("/scores/{id}/output/{name}", get(get_output))
+        .route("/scores/{id}/preview-settings", post(preview_settings))
         .route("/scores/{id}/compare-settings", post(compare_settings))
         .route("/run", post(run_extraction))
         .route("/run-single", post(run_single_extraction))
@@ -149,19 +150,9 @@ async fn compare_settings(
         Err(_) => return (StatusCode::NOT_FOUND, "Score not found").into_response(),
     };
 
-    let html = if !base_score.source_html_file.is_empty() {
-        match std::fs::read_to_string(&base_score.source_html_file) {
-            Ok(content) => content,
-            Err(_) => match fetch_html(&base_score.url).await {
-                Ok(content) => content,
-                Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
-            },
-        }
-    } else {
-        match fetch_html(&base_score.url).await {
-            Ok(content) => content,
-            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
-        }
+    let html = match load_score_source_html(&base_score).await {
+        Ok(content) => content,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
 
     let baseline_config = base_score
@@ -191,6 +182,48 @@ async fn compare_settings(
         &state.score_store,
     );
     Json(score).into_response()
+}
+
+async fn preview_settings(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<SingleRunRequest>,
+) -> impl IntoResponse {
+    let base_score = match state.score_store.load(&id) {
+        Ok(score) => score,
+        Err(_) => return (StatusCode::NOT_FOUND, "Score not found").into_response(),
+    };
+
+    let html = match load_score_source_html(&base_score).await {
+        Ok(content) => content,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+
+    let baseline_config = base_score
+        .settings_snapshot
+        .states
+        .get(&payload.extractor)
+        .map(|state| state.config.clone())
+        .unwrap_or_default();
+
+    let candidate_config = if let Some(config) = &payload.config {
+        let mut candidate_state = crate::extractor_config::ExtractorState {
+            enabled: true,
+            config: baseline_config.clone(),
+        };
+        apply_extractor_config(&payload.extractor, config, &mut candidate_state);
+        candidate_state.config
+    } else {
+        baseline_config
+    };
+
+    let preview = crate::scores::preview_single_extractor_settings(
+        &base_score.url,
+        &html,
+        &payload.extractor,
+        candidate_config,
+    );
+    Json(preview).into_response()
 }
 
 async fn toggle_extractor(
@@ -249,6 +282,34 @@ async fn toggle_extractor(
                     .map(|s| s.to_string())
                     .collect();
             }
+            "turndown" => {
+                cfg.turndown = crate::extractor_config::TurndownConfig::default();
+            }
+            "percollate" => {
+                cfg.percollate = crate::extractor_config::PercollateConfig::default();
+            }
+            "mdream" => {
+                cfg.mdream = crate::extractor_config::MdreamConfig::default();
+            }
+            "trafilatura" => {
+                cfg.trafilatura = crate::extractor_config::TrafilaturaConfig::default();
+            }
+            "html2text-py" => {
+                cfg.html2text_py = crate::extractor_config::Html2TextPythonConfig::default();
+            }
+            "lightpanda" => {
+                cfg.lightpanda = crate::extractor_config::LightpandaConfig::default();
+            }
+            "webclaw" => {
+                cfg.webclaw = crate::extractor_config::WebclawConfig::default();
+            }
+            "e2m" => {
+                cfg.e2m = crate::extractor_config::E2mConfig::default();
+            }
+            "html-to-markdown-go" => {
+                cfg.html_to_markdown_go =
+                    crate::extractor_config::HtmlToMarkdownGoConfig::default();
+            }
             _ => {}
         }
         states.states.insert(
@@ -276,36 +337,126 @@ async fn configure_extractor(
     (StatusCode::OK, "Configured").into_response()
 }
 
+fn extractor_config_payload<'a>(config: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
+    config.get(key).unwrap_or(config)
+}
+
 fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut ExtractorState) {
     match name {
         "html2text" => {
-            if let Ok(cfg) = serde_json::from_value(config.clone()) {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "html2text").clone())
+            {
                 state.config.html2text = cfg;
             }
         }
         "htmd" => {
-            if let Ok(cfg) = serde_json::from_value(config.clone()) {
+            if let Ok(cfg) = serde_json::from_value::<crate::extractor_config::HtmdConfig>(
+                extractor_config_payload(config, "htmd").clone(),
+            ) {
+                state.config.skip_tags = cfg.skip_tags.clone();
                 state.config.htmd = cfg;
             }
         }
+        "html2md-rs" => {
+            if let Ok(cfg) = serde_json::from_value::<crate::extractor_config::Html2MdRsConfig>(
+                extractor_config_payload(config, "html2md_rs").clone(),
+            ) {
+                state.config.skip_tags = cfg.ignore_tags.clone();
+                state.config.html2md_rs = cfg;
+            }
+        }
         "mdka" => {
-            if let Ok(cfg) = serde_json::from_value(config.clone()) {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "mdka").clone())
+            {
                 state.config.mdka = cfg;
             }
         }
         "readable-readability" => {
-            if let Ok(cfg) = serde_json::from_value(config.clone()) {
+            if let Ok(cfg) = serde_json::from_value(
+                extractor_config_payload(config, "readable_readability").clone(),
+            ) {
                 state.config.readable_readability = cfg;
             }
         }
         "dom_smoothie" => {
-            if let Ok(cfg) = serde_json::from_value(config.clone()) {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "dom_smoothie").clone())
+            {
                 state.config.dom_smoothie = cfg;
             }
         }
         "august" => {
-            if let Some(w) = config.get("max_width").and_then(|v| v.as_u64()) {
+            if let Some(w) = config
+                .get("max_width")
+                .or_else(|| config.get("augus_max_width"))
+                .and_then(|v| v.as_u64())
+            {
                 state.config.augus_max_width = w as usize;
+            }
+        }
+        "turndown" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "turndown").clone())
+            {
+                state.config.turndown = cfg;
+            }
+        }
+        "percollate" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "percollate").clone())
+            {
+                state.config.percollate = cfg;
+            }
+        }
+        "mdream" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "mdream").clone())
+            {
+                state.config.mdream = cfg;
+            }
+        }
+        "trafilatura" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "trafilatura").clone())
+            {
+                state.config.trafilatura = cfg;
+            }
+        }
+        "html2text-py" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "html2text_py").clone())
+            {
+                state.config.html2text_py = cfg;
+            }
+        }
+        "lightpanda" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "lightpanda").clone())
+            {
+                state.config.lightpanda = cfg;
+            }
+        }
+        "webclaw" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "webclaw").clone())
+            {
+                state.config.webclaw = cfg;
+            }
+        }
+        "e2m" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "e2m").clone())
+            {
+                state.config.e2m = cfg;
+            }
+        }
+        "html-to-markdown-go" => {
+            if let Ok(cfg) =
+                serde_json::from_value(extractor_config_payload(config, "html_to_markdown_go").clone())
+            {
+                state.config.html_to_markdown_go = cfg;
             }
         }
         _ => {}
@@ -369,6 +520,17 @@ async fn fetch_html(url: &str) -> Result<String, String> {
     Ok(s)
 }
 
+async fn load_score_source_html(score: &crate::scores::Score) -> Result<String, String> {
+    if !score.source_html_file.is_empty() {
+        match std::fs::read_to_string(&score.source_html_file) {
+            Ok(content) => Ok(content),
+            Err(_) => fetch_html(&score.url).await,
+        }
+    } else {
+        fetch_html(&score.url).await
+    }
+}
+
 #[derive(serde::Deserialize)]
 pub struct RunRequest {
     pub url: String,
@@ -389,3 +551,48 @@ pub struct GradeRequest {
 }
 
 static HTML: &str = include_str!("web_ui.html");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_extractor_config_accepts_nested_payloads() {
+        let mut state = ExtractorState::default();
+
+        apply_extractor_config(
+            "html2text",
+            &serde_json::json!({
+                "skip_tags": [],
+                "html2text": {
+                    "max_wrap_width": 42,
+                    "raw_mode": true,
+                    "no_link_wrapping": true
+                }
+            }),
+            &mut state,
+        );
+
+        assert_eq!(state.config.html2text.max_wrap_width, 42);
+        assert!(state.config.html2text.raw_mode);
+        assert!(state.config.html2text.no_link_wrapping);
+    }
+
+    #[test]
+    fn apply_extractor_config_accepts_direct_payloads() {
+        let mut state = ExtractorState::default();
+
+        apply_extractor_config(
+            "htmd",
+            &serde_json::json!({
+                "skip_tags": ["nav", "aside"],
+                "heading_style": "setex"
+            }),
+            &mut state,
+        );
+
+        assert_eq!(state.config.htmd.heading_style, "setex");
+        assert_eq!(state.config.htmd.skip_tags, vec!["nav", "aside"]);
+        assert_eq!(state.config.skip_tags, vec!["nav", "aside"]);
+    }
+}

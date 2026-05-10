@@ -28,14 +28,19 @@
             color: var(--text);
             min-height: 100vh;
             padding: 0.9rem;
+            overflow-x: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
-        .container { max-width: 1700px; margin: 0 auto; display: grid; gap: 0.75rem; }
+        .container { display: flex; flex-direction: column; min-width: 0; padding: 0.5rem; flex: 1; gap: 0.5rem; }
         h1 { font-size: clamp(1.55rem, 3vw, 2.2rem); margin-bottom: 0.2rem; }
         h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.55rem; }
-        p { color: var(--muted); font-size: 0.86rem; }
+        p { color: var(--muted); font-size: 0.86rem; overflow-wrap: anywhere; }
         button, input, select { font: inherit; }
         input[type="text"], input[type="number"], select {
             width: 100%;
+            min-width: 0;
             padding: 0.58rem 0.74rem;
             border-radius: 10px;
             border: 1px solid rgba(146, 177, 214, 0.16);
@@ -53,6 +58,7 @@
             font-weight: 700;
             cursor: pointer;
             font-size: 0.84rem;
+            max-width: 100%;
         }
         button:hover { filter: brightness(1.04); }
         button:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -69,36 +75,47 @@
         .panel {
             background: var(--panel);
             border: 1px solid var(--border);
-            border-radius: 18px;
+            border-radius: 16px;
             box-shadow: var(--shadow);
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
         .panel-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 0.7rem;
-            padding: 0.7rem 0.85rem;
+            gap: 0.5rem;
+            padding: 0.45rem 0.6rem;
             border-bottom: 1px solid var(--border);
             background: rgba(255, 255, 255, 0.02);
+            flex-shrink: 0;
         }
-        .panel-body { padding: 0.85rem; }
-        .settings-summary, .keyboard-hint, .score-meta, .score-meta-2, .muted { color: var(--muted); font-size: 0.75rem; }
-        .toolbar-actions { display: flex; gap: 0.45rem; flex-wrap: wrap; align-items: center; }
+        .panel-header > * { min-width: 0; }
+        .panel-body { padding: 0.5rem; min-width: 0; overflow-y: auto; flex: 1; }
+        .settings-summary, .keyboard-hint, .score-meta, .score-meta-2, .muted {
+            color: var(--muted);
+            font-size: 0.75rem;
+            overflow-wrap: anywhere;
+        }
+        .toolbar-actions { display: flex; gap: 0.45rem; flex-wrap: wrap; align-items: center; min-width: 0; }
+        .toolbar-actions > * { min-width: 0; }
         .hero {
             background: linear-gradient(135deg, rgba(18, 28, 47, 0.96), rgba(10, 18, 31, 0.99));
             border: 1px solid var(--border);
-            border-radius: 18px;
-            padding: 0.85rem;
+            border-radius: 16px;
+            padding: 0.6rem;
             box-shadow: var(--shadow);
         }
         .hero-grid {
             display: grid;
-            grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
-            gap: 0.8rem;
+            grid-template-columns: minmax(0, 1fr) minmax(300px, 0.6fr);
+            gap: 0.6rem;
             align-items: start;
+            min-width: 0;
         }
-        .url-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.6rem; }
+        .hero-grid > * { min-width: 0; }
+        .url-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.6rem; min-width: 0; }
         .status { min-height: 1.2rem; margin-top: 0.55rem; }
         .loading, .success, .error {
             border-radius: 10px;
@@ -111,8 +128,8 @@
         .error { background: rgba(255, 107, 107, 0.12); color: #ffd0d0; border-color: rgba(255, 107, 107, 0.18); }
         .hero-stats {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 0.45rem;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.35rem;
         }
         .hero-stat {
             background: rgba(13, 24, 42, 0.86);
@@ -124,109 +141,82 @@
         .hero-stat span { font-size: 0.76rem; color: var(--muted); }
         .layout {
             display: grid;
-            grid-template-columns: minmax(290px, 340px) minmax(0, 1fr);
-            gap: 0.75rem;
-            align-items: start;
+            grid-template-columns: minmax(340px, 440px) minmax(0, 1fr);
+            gap: 0.5rem;
+            align-items: stretch;
+            min-width: 0;
+            flex: 1;
         }
-        .settings-stack { display: grid; gap: 0.75rem; }
-        .extractor-list { display: grid; gap: 0.45rem; }
+        .layout > * { min-width: 0; }
+        .settings-stack { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; min-height: 0; overflow-y: auto; flex: 1; contain: strict; }
+        .settings-stack > .panel { flex-shrink: 0; }
+        .settings-panel-body { min-width: 0; }
+        .extractor-list { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
         .extractor-card {
             background: var(--panel-2);
             border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 0.68rem;
-            display: grid;
-            gap: 0.55rem;
-        }
-        .extractor-head { display: flex; align-items: center; justify-content: space-between; gap: 0.55rem; }
-        .extractor-main { display: flex; align-items: center; gap: 0.8rem; min-width: 0; }
-        .extractor-name { font-weight: 700; word-break: break-word; font-size: 0.88rem; }
-        .extractor-meta { font-size: 0.72rem; color: var(--muted); }
-        .toggle {
-            width: 44px;
-            height: 24px;
-            border-radius: 999px;
-            background: rgba(146, 177, 214, 0.18);
-            position: relative;
-            border: 1px solid rgba(146, 177, 214, 0.16);
-            cursor: pointer;
-        }
-        .toggle::after {
-            content: '';
-            position: absolute;
-            top: 3px;
-            left: 3px;
-            width: 16px;
-            height: 16px;
-            border-radius: 50%;
-            background: #fff;
-            transition: transform 0.2s ease;
-        }
-        .extractor-card.enabled .toggle {
-            background: linear-gradient(135deg, rgba(97, 218, 251, 0.24), rgba(139, 247, 210, 0.32));
-        }
-        .extractor-card.enabled .toggle::after { transform: translateX(19px); }
-        .config-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 0.42rem;
-        }
-        .config-field {
-            background: var(--panel-3);
-            border: 1px solid rgba(146, 177, 214, 0.12);
             border-radius: 10px;
-            padding: 0.45rem 0.5rem;
-        }
-        .config-field label {
-            display: block;
-            font-size: 0.64rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--muted);
-            margin-bottom: 0.26rem;
-        }
-        .config-field.checkbox-field {
+            padding: 0.38rem;
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 0.55rem;
+            flex-direction: column;
+            gap: 0.3rem;
+            min-width: 0;
         }
+        .extractor-card.enabled { padding-bottom: 0.45rem; }
+        .extractor-head { display: flex; align-items: center; justify-content: space-between; gap: 0.3rem; }
+        .extractor-main { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+        .extractor-name { font-weight: 700; word-break: break-word; font-size: 0.85rem; }
+        .extractor-meta { font-size: 0.67rem; color: var(--muted); }
+        .config-grid { display: none; }
+        .extractor-card.enabled .config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.2rem; min-width: 0; }
+        .config-field { background: var(--panel-3); border: 1px solid rgba(146, 177, 214, 0.1); border-radius: 6px; padding: 0.22rem 0.3rem; min-width: 0; }
+        .config-field label { display: block; font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.18rem; overflow-wrap: anywhere; }
+        .config-field input[type="text"], .config-field input[type="number"], .config-field select { padding: 0.32rem 0.42rem; font-size: 0.76rem; border-radius: 6px; }
+        .extractor-card.disabled { opacity: 0.5; border-style: dashed; }
+        .config-field.checkbox-field { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
         .config-field.checkbox-field label { margin-bottom: 0; }
-        .config-field input[type="checkbox"] { width: 15px; height: 15px; }
+        .config-field input[type="checkbox"] { width: 14px; height: 14px; }
         .variant-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 0.45rem;
+            min-width: 0;
         }
         .variant-grid .full { grid-column: 1 / -1; }
-        .compare-shell { display: grid; gap: 0.75rem; }
+        .compare-shell { display: grid; gap: 0.75rem; min-width: 0; }
         .compare-empty { padding: 2rem 1rem; text-align: center; color: var(--muted); }
         .compact-header {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
             gap: 0.7rem;
             align-items: start;
+            min-width: 0;
         }
         .compare-meta-row {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 0.5rem;
-            margin-bottom: 0.7rem;
+            gap: 0.4rem;
+            margin-bottom: 0.4rem;
+            min-width: 0;
         }
         .compare-meta-card {
             background: var(--panel-2);
             border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 0.62rem;
+            border-radius: 10px;
+            padding: 0.45rem;
+            min-width: 0;
         }
         .compare-meta-card strong { display: block; font-size: 0.87rem; margin-bottom: 0.14rem; }
-        .compare-meta-card span { display: block; color: var(--muted); font-size: 0.73rem; }
+        .compare-meta-card span { display: block; color: var(--muted); font-size: 0.73rem; overflow-wrap: anywhere; }
         .compare-controls {
-            display: grid;
-            grid-template-columns: 1fr 1fr auto;
-            gap: 0.5rem;
-            margin-bottom: 0.65rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            margin-bottom: 0.4rem;
+            min-width: 0;
         }
+        .compare-controls select { flex: 1 1 220px; min-width: 0; }
+        .compare-controls button { flex: 0 1 auto; }
         .right-selector {
             display: flex;
             gap: 0.4rem;
@@ -276,7 +266,7 @@
         .diff-pane {
             min-width: 0;
             border-right: 1px solid var(--border);
-            max-height: 78vh;
+            max-height: 65vh;
             overflow: auto;
         }
         .diff-pane:last-child { border-right: none; }
@@ -326,7 +316,9 @@
             justify-content: space-between;
             gap: 0.65rem;
             align-items: flex-start;
+            min-width: 0;
         }
+        .score-card > * { min-width: 0; }
         .score-card button { padding: 0.54rem 0.74rem; }
         .score-url { color: var(--text); font-weight: 600; margin-bottom: 0.2rem; word-break: break-word; font-size: 0.86rem; }
         .comparison-stage.fullscreen {
@@ -334,18 +326,20 @@
             inset: 0;
             z-index: 3000;
             background: rgba(7, 12, 20, 0.98);
-            padding: 0.75rem;
+            padding: 0.4rem;
         }
         .comparison-stage.fullscreen .panel {
-            height: calc(100vh - 1.5rem);
+            height: 100%;
             display: grid;
             grid-template-rows: auto 1fr;
         }
         .comparison-stage.fullscreen .panel-body {
             min-height: 0;
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
-        .comparison-stage.fullscreen .diff-pane { max-height: none; height: calc(100vh - 13.8rem); }
+        .comparison-stage.fullscreen .diff-pane { max-height: none; height: 100%; }
         @media (max-width: 1220px) {
             .layout, .hero-grid { grid-template-columns: 1fr; }
         }
@@ -354,6 +348,16 @@
             .diff-header, .diff-grid { grid-template-columns: 1fr; }
             .diff-pane, .diff-pane-header { border-right: none; }
             .diff-pane-header { border-bottom: 1px solid var(--border); }
+            .score-card { flex-direction: column; }
+            .panel-header { flex-direction: column; align-items: stretch; }
+            .compact-header { grid-template-columns: 1fr; }
+            .toolbar-actions { width: 100%; }
+            .toolbar-actions button { flex: 1 1 140px; }
+        }
+        @media (max-width: 640px) {
+            body { padding: 0.55rem; }
+            .hero, .panel-header, .panel-body { padding-left: 0.7rem; padding-right: 0.7rem; }
+            .url-row button, .variant-grid button { width: 100%; }
         }
     </style>
 </head>
@@ -389,7 +393,7 @@
                         </div>
                         <div class="keyboard-hint">Always expanded</div>
                     </div>
-                    <div class="panel-body">
+                    <div class="settings-panel-body">
                         <div id="extractors" class="extractor-list"></div>
                     </div>
                 </section>
@@ -404,7 +408,7 @@
                     <div class="panel-body">
                         <div class="variant-grid">
                             <select id="variantExtractor"></select>
-                            <button onclick="compareCurrentSettings()" id="runSingleBtn">Open Comparison</button>
+                            <button onclick="compareCurrentSettings()" id="runSingleBtn">Preview In Place</button>
                             <div class="full keyboard-hint">Uses the currently opened run as the baseline and reuses its saved source HTML when available.</div>
                         </div>
                     </div>
@@ -450,30 +454,86 @@
             throw new Error('Failed to load diff library: expected window.Diff from jsdiff');
         }
 
-        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','fast_html2md','htmd','html2md','html2md-rs','html2text','llm_readability','mdka','nanohtml2text','readability','readable-readability'];
+        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','e2m','fast_html2md','html2md','html2md-rs','html2text','html2text-py','html-to-markdown-go','htmd','lightpanda','llm_readability','mdka','mdream','nanohtml2text','percollate','readability','readable-readability','trafilatura','turndown','webclaw'];
         const CONFIG_FIELDS = {
             html2text: [{name:'max_wrap_width',type:'number'},{name:'raw_mode',type:'checkbox'},{name:'no_link_wrapping',type:'checkbox'}],
             htmd: [{name:'skip_tags',type:'text'},{name:'heading_style',type:'select',options:['atx','setex']}],
+            'html2md-rs': [{name:'ignore_tags',type:'text'}],
             mdka: [{name:'mode',type:'select',options:['balanced','strict','minimal','semantic','preserve']},{name:'drop_interactive_shell',type:'checkbox'}],
             readable_readability: [{name:'strip_unlikelys',type:'checkbox'},{name:'weight_classes',type:'checkbox'},{name:'clean_conditionally',type:'checkbox'}],
             dom_smoothie: [{name:'max_elements_to_parse',type:'number'},{name:'text_mode',type:'select',options:['markdown','raw','formatted']}],
-            august: [{name:'max_width',type:'number'}]
+            august: [{name:'max_width',type:'number'}],
+            turndown: [
+                {name:'heading_style',type:'select',options:['setext','atx']},
+                {name:'hr',type:'text'},{name:'bullet_list_marker',type:'select',options:['-','+','*']},
+                {name:'code_block_style',type:'select',options:['indented','fenced']},
+                {name:'fence',type:'select',options:['```','~~~']},
+                {name:'em_delimiter',type:'select',options:['_','*']},
+                {name:'strong_delimiter',type:'select',options:['**','__']},
+                {name:'link_style',type:'select',options:['inlined','referenced']},
+                {name:'link_reference_style',type:'select',options:['full','collapsed','shortcut']},
+                {name:'preformatted_code',type:'checkbox'},
+            ],
+            percollate: [{name:'inline_images',type:'checkbox'},{name:'hyphenate',type:'checkbox'},{name:'fences',type:'checkbox'}],
+            mdream: [
+                {name:'minimal',type:'checkbox'},{name:'isolate_main',type:'checkbox'},
+                {name:'frontmatter',type:'checkbox'},{name:'clean_urls',type:'checkbox'},{name:'tailwind',type:'checkbox'},
+            ],
+            trafilatura: [
+                {name:'favor_precision',type:'checkbox'},{name:'favor_recall',type:'checkbox'},
+                {name:'include_comments',type:'checkbox'},{name:'include_tables',type:'checkbox'},
+                {name:'include_images',type:'checkbox'},{name:'include_formatting',type:'checkbox'},
+                {name:'include_links',type:'checkbox'},{name:'deduplicate',type:'checkbox'},{name:'with_metadata',type:'checkbox'},
+            ],
+            html2text_py: [
+                {name:'ignore_links',type:'checkbox'},{name:'ignore_images',type:'checkbox'},
+                {name:'ignore_emphasis',type:'checkbox'},{name:'body_width',type:'number'},
+                {name:'unicode_snob',type:'checkbox'},{name:'escape_snob',type:'checkbox'},
+                {name:'inline_links',type:'checkbox'},{name:'google_doc',type:'checkbox'},
+                {name:'dash_unordered_list',type:'checkbox'},
+            ],
+            lightpanda: [
+                {name:'strip_js',type:'checkbox'},{name:'strip_css',type:'checkbox'},{name:'strip_ui',type:'checkbox'},
+                {name:'wait_until',type:'select',options:['load','domcontentloaded','networkidle','done']},
+                {name:'wait_ms',type:'number'},
+            ],
+            webclaw: [
+                {name:'only_main_content',type:'checkbox'},
+                {name:'include_css',type:'text'},{name:'exclude_css',type:'text'},
+                {name:'format',type:'select',options:['markdown','text','llm','html','json']},
+            ],
+            e2m: [{name:'engine',type:'select',options:['unstructured','jina','firecrawl']}],
+            'html-to-markdown-go': [{name:'domain',type:'text'},{name:'plugins',type:'text'}],
         };
+        const CONFIGURABLE_EXTRACTORS = Object.keys(CONFIG_FIELDS);
         const FIELD_MAP = {
             html2text: {max_wrap_width:'html2text',raw_mode:'html2text',no_link_wrapping:'html2text'},
             htmd: {skip_tags:'htmd',heading_style:'htmd'},
+            'html2md-rs': {ignore_tags:'html2md_rs'},
             mdka: {mode:'mdka',drop_interactive_shell:'mdka'},
             readable_readability: {strip_unlikelys:'readable_readability',weight_classes:'readable_readability',clean_conditionally:'readable_readability'},
             dom_smoothie: {max_elements_to_parse:'dom_smoothie',text_mode:'dom_smoothie'},
-            august: {max_width:'augus_max_width'}
+            august: {max_width:'augus_max_width'},
+            turndown: {heading_style:'turndown',hr:'turndown',bullet_list_marker:'turndown',code_block_style:'turndown',fence:'turndown',em_delimiter:'turndown',strong_delimiter:'turndown',link_style:'turndown',link_reference_style:'turndown',preformatted_code:'turndown'},
+            percollate: {inline_images:'percollate',hyphenate:'percollate',fences:'percollate'},
+            mdream: {minimal:'mdream',isolate_main:'mdream',frontmatter:'mdream',clean_urls:'mdream',tailwind:'mdream'},
+            trafilatura: {favor_precision:'trafilatura',favor_recall:'trafilatura',include_comments:'trafilatura',include_tables:'trafilatura',include_images:'trafilatura',include_formatting:'trafilatura',include_links:'trafilatura',deduplicate:'trafilatura',with_metadata:'trafilatura'},
+            html2text_py: {ignore_links:'html2text_py',ignore_images:'html2text_py',ignore_emphasis:'html2text_py',body_width:'html2text_py',unicode_snob:'html2text_py',escape_snob:'html2text_py',inline_links:'html2text_py',google_doc:'html2text_py',dash_unordered_list:'html2text_py'},
+            lightpanda: {strip_js:'lightpanda',strip_css:'lightpanda',strip_ui:'lightpanda',wait_until:'lightpanda',wait_ms:'lightpanda'},
+            webclaw: {only_main_content:'webclaw',include_css:'webclaw',exclude_css:'webclaw',format:'webclaw'},
+            e2m: {engine:'e2m'},
+            'html-to-markdown-go': {domain:'html_to_markdown_go',plugins:'html_to_markdown_go'},
         };
 
         let states = {};
         let scores = [];
         let activeScore = null;
         let activeOutputs = {};
-        let comparison = { left: null, right: null, pinnedLeft: null, fullscreen: false };
+        let comparison = { left: null, right: null, pinnedLeft: null, fullscreen: false, livePreview: null, livePreviewPending: false };
         let scrollSyncLock = false;
+        const configPersistTimers = {};
+        let livePreviewRefreshTimer = null;
+        let livePreviewRequestId = 0;
 
         function escapeHtml(value) {
             return String(value ?? '')
@@ -521,6 +581,117 @@
             return structuredClone(states.states?.[name]?.config || {});
         }
 
+        function getExtractorConfigPayload(name) {
+            const cfg = getExtractorConfig(name);
+            if (name === 'html2text') return structuredClone(cfg.html2text || {});
+            if (name === 'htmd') return structuredClone(cfg.htmd || {});
+            if (name === 'html2md-rs') return structuredClone(cfg.html2md_rs || {});
+            if (name === 'mdka') return structuredClone(cfg.mdka || {});
+            if (name === 'readable-readability') return structuredClone(cfg.readable_readability || {});
+            if (name === 'dom_smoothie') return structuredClone(cfg.dom_smoothie || {});
+            if (name === 'august') return { max_width: cfg.augus_max_width ?? null };
+            if (name === 'turndown') return structuredClone(cfg.turndown || {});
+            if (name === 'percollate') return structuredClone(cfg.percollate || {});
+            if (name === 'mdream') return structuredClone(cfg.mdream || {});
+            if (name === 'trafilatura') return structuredClone(cfg.trafilatura || {});
+            if (name === 'html2text-py') return structuredClone(cfg.html2text_py || {});
+            if (name === 'lightpanda') return structuredClone(cfg.lightpanda || {});
+            if (name === 'webclaw') return structuredClone(cfg.webclaw || {});
+            if (name === 'e2m') return structuredClone(cfg.e2m || {});
+            if (name === 'html-to-markdown-go') return structuredClone(cfg.html_to_markdown_go || {});
+            return {};
+        }
+
+        function isConfigurableExtractor(name) {
+            return CONFIGURABLE_EXTRACTORS.includes(name);
+        }
+
+        function setStatus(kind, message) {
+            document.getElementById('status').innerHTML = `<div class="${kind}">${escapeHtml(message)}</div>`;
+        }
+
+        async function persistExtractorConfig(name) {
+            const res = await fetch(`/c/${name}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(getExtractorConfigPayload(name))
+            });
+            if (!res.ok) throw new Error(await res.text());
+        }
+
+        function clearLivePreview({ render = false } = {}) {
+            comparison.livePreview = null;
+            comparison.livePreviewPending = false;
+            livePreviewRequestId += 1;
+            if (livePreviewRefreshTimer) {
+                clearTimeout(livePreviewRefreshTimer);
+                livePreviewRefreshTimer = null;
+            }
+            if (render) renderComparison();
+        }
+
+        function scheduleLivePreviewRefresh(extractor, delay = 180) {
+            if (!activeScore || comparison.livePreview?.extractor_key !== extractor) return;
+            if (livePreviewRefreshTimer) clearTimeout(livePreviewRefreshTimer);
+            livePreviewRefreshTimer = setTimeout(() => {
+                void refreshLivePreview(extractor, false);
+            }, delay);
+        }
+
+        async function refreshLivePreview(extractor, announce) {
+            if (!activeScore) return;
+            const requestId = ++livePreviewRequestId;
+            comparison.livePreviewPending = true;
+            renderComparison();
+            try {
+                const res = await fetch(`/scores/${activeScore.id}/preview-settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        extractor,
+                        config: getExtractorConfigPayload(extractor)
+                    })
+                });
+                if (!res.ok) throw new Error(await res.text());
+                const preview = await res.json();
+                if (requestId !== livePreviewRequestId) return;
+                comparison.livePreview = preview;
+                comparison.livePreviewPending = false;
+                renderComparison();
+                if (announce) {
+                    setStatus('success', `${extractor} settings preview updated in place.`);
+                }
+            } catch (e) {
+                if (requestId !== livePreviewRequestId) return;
+                comparison.livePreviewPending = false;
+                renderComparison();
+                setStatus('error', e.message);
+            }
+        }
+
+        async function activateLivePreview(extractor, announce = true) {
+            if (!activeScore || !extractor) return;
+            if (!activeScore.extractor_results.some(result => result.name === extractor)) {
+                setStatus('error', `The opened run does not include ${extractor}.`);
+                return;
+            }
+            comparison.left = extractor;
+            comparison.pinnedLeft = extractor;
+            comparison.livePreview = {
+                extractor_key: extractor,
+                name: `${extractor} current settings`,
+                output: '',
+                output_size: 0,
+                reduction_percent: 0,
+                time_micros: 0,
+                panicked: false
+            };
+            comparison.livePreviewPending = true;
+            await ensureOutputLoaded(extractor);
+            renderComparison();
+            await refreshLivePreview(extractor, announce);
+        }
+
         function setSummaryCounts() {
             const enabled = EXTRACTORS.filter(name => states.states?.[name]?.enabled !== false).length;
             document.getElementById('enabledCount').textContent = String(enabled);
@@ -541,8 +712,8 @@
         function renderVariantExtractorOptions() {
             const select = document.getElementById('variantExtractor');
             const current = select.value;
-            select.innerHTML = EXTRACTORS.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
-            if (EXTRACTORS.includes(current)) select.value = current;
+            select.innerHTML = CONFIGURABLE_EXTRACTORS.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+            select.value = CONFIGURABLE_EXTRACTORS.includes(current) ? current : CONFIGURABLE_EXTRACTORS[0];
         }
 
         function renderConfigField(name, field) {
@@ -565,21 +736,31 @@
                 const resolved = Number.isFinite(value) ? value : '';
                 return `<div class="config-field">
                     <label for="${name}-${field.name}">${escapeHtml(field.name)}</label>
-                    <input id="${name}-${field.name}" type="number" value="${resolved}" onchange="updateConfig('${name}','${field.name}',this.value === '' ? null : parseInt(this.value, 10))">
+                    <input id="${name}-${field.name}" type="number" value="${resolved}" oninput="updateConfig('${name}','${field.name}',this.value === '' ? null : parseInt(this.value, 10), true)">
                 </div>`;
             }
             return `<div class="config-field">
                 <label for="${name}-${field.name}">${escapeHtml(field.name)}</label>
-                <input id="${name}-${field.name}" type="text" value="${Array.isArray(value) ? escapeHtml(value.join(',')) : escapeHtml(value || '')}" onchange="updateConfig('${name}','${field.name}',this.value)">
+                <input id="${name}-${field.name}" type="text" value="${Array.isArray(value) ? escapeHtml(value.join(',')) : escapeHtml(value || '')}" oninput="updateConfig('${name}','${field.name}',this.value, true)">
             </div>`;
         }
 
         function renderExtractors() {
             const el = document.getElementById('extractors');
-            el.innerHTML = EXTRACTORS.map(name => {
+            const sorted = [...EXTRACTORS].sort((a, b) => {
+                const sa = states.states?.[a] || { enabled: true, config: {} };
+                const sb = states.states?.[b] || { enabled: true, config: {} };
+                const fa = (CONFIG_FIELDS[a] || []).length;
+                const fb = (CONFIG_FIELDS[b] || []).length;
+                if (sa.enabled && sb.enabled) return fb - fa;
+                if (!sa.enabled && !sb.enabled) return fb - fa;
+                if (sa.enabled && !sb.enabled) return -1;
+                return 1;
+            });
+            el.innerHTML = sorted.map(name => {
                 const state = states.states?.[name] || { enabled: true, config: {} };
                 const fields = CONFIG_FIELDS[name] || [];
-                return `<section class="extractor-card ${state.enabled ? 'enabled' : ''}">
+                return `<section class="extractor-card ${state.enabled ? 'enabled' : 'disabled'}">
                     <div class="extractor-head">
                         <div class="extractor-main">
                             <button class="toggle" onclick="toggleExtractor('${name}', ${!state.enabled})"></button>
@@ -599,18 +780,36 @@
             await loadStates();
         }
 
-        async function updateConfig(name, key, value) {
-            if (key === 'skip_tags') {
+        async function updateConfig(name, key, value, defer = false) {
+            if (key === 'skip_tags' || key === 'ignore_tags') {
                 value = String(value || '').split(',').map(part => part.trim()).filter(Boolean);
             }
             setConfigField(name, key, value);
-            const cfg = states.states?.[name]?.config || {};
-            await fetch(`/c/${name}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(cfg)
-            });
-            await loadStates();
+            if (configPersistTimers[name]) clearTimeout(configPersistTimers[name]);
+
+            const persistNow = async () => {
+                try {
+                    await persistExtractorConfig(name);
+                } catch (e) {
+                    setStatus('error', e.message);
+                    throw e;
+                }
+                if (comparison.livePreview?.extractor_key === name) {
+                    scheduleLivePreviewRefresh(name, 0);
+                }
+            };
+
+            if (defer) {
+                configPersistTimers[name] = setTimeout(() => {
+                    void persistNow();
+                }, 220);
+                if (comparison.livePreview?.extractor_key === name) {
+                    scheduleLivePreviewRefresh(name, 260);
+                }
+                return;
+            }
+
+            await persistNow();
         }
 
         async function runExtraction() {
@@ -650,19 +849,8 @@
             btn.disabled = true;
             status.innerHTML = `<div class="loading">Comparing saved ${escapeHtml(extractor)} settings against the current editor state...</div>`;
             try {
-                const res = await fetch(`/scores/${activeScore.id}/compare-settings`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        extractor,
-                        config: getExtractorConfig(extractor)
-                    })
-                });
-                if (!res.ok) throw new Error(await res.text());
-                const score = await res.json();
-                status.innerHTML = `<div class="success">${escapeHtml(extractor)} settings comparison ready. Opening fullscreen comparison.</div>`;
-                await loadScores();
-                await openScore(score.id, true);
+                await activateLivePreview(extractor, false);
+                status.innerHTML = `<div class="success">${escapeHtml(extractor)} settings preview opened in the current comparison view.</div>`;
             } catch (e) {
                 status.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
             } finally {
@@ -742,6 +930,7 @@
             comparison.left = left;
             comparison.right = right;
             comparison.pinnedLeft = left;
+            clearLivePreview();
             await ensureOutputLoaded(left);
             if (right && right !== left) await ensureOutputLoaded(right);
             setFullscreen(fullscreen);
@@ -756,18 +945,26 @@
 
         async function setLeftReference(name, pin) {
             if (!activeScore || !name) return;
+            if (comparison.livePreview && comparison.livePreview.extractor_key !== name) {
+                clearLivePreview();
+            }
             comparison.left = name;
             if (pin) comparison.pinnedLeft = name;
-            if (comparison.right === name) {
+            if (!comparison.livePreview && comparison.right === name) {
                 comparison.right = activeScore.extractor_results.find(result => result.name !== name)?.name || name;
             }
             await ensureOutputLoaded(comparison.left);
-            if (comparison.right) await ensureOutputLoaded(comparison.right);
+            if (comparison.livePreview?.extractor_key === name) {
+                scheduleLivePreviewRefresh(name, 0);
+            } else if (comparison.right) {
+                await ensureOutputLoaded(comparison.right);
+            }
             renderComparison();
         }
 
         async function setRightComparison(name) {
             if (!activeScore || !name) return;
+            clearLivePreview();
             comparison.right = name;
             if (comparison.left === name) {
                 comparison.left = activeScore.extractor_results.find(result => result.name !== name)?.name || name;
@@ -778,7 +975,7 @@
         }
 
         async function swapComparison() {
-            if (!comparison.left || !comparison.right) return;
+            if (!comparison.left || !comparison.right || comparison.livePreview) return;
             const oldLeft = comparison.left;
             comparison.left = comparison.right;
             comparison.right = oldLeft;
@@ -792,7 +989,7 @@
             await fetch(`/scores/${activeScore.id}`, { method: 'DELETE' });
             activeScore = null;
             activeOutputs = {};
-            comparison = { left: null, right: null, pinnedLeft: null, fullscreen: false };
+            comparison = { left: null, right: null, pinnedLeft: null, fullscreen: false, livePreview: null, livePreviewPending: false };
             setFullscreen(false);
             document.getElementById('comparisonRoot').innerHTML = '<div class="compare-empty">Run deleted.</div>';
             document.getElementById('compareMeta').textContent = 'Select a run to inspect, or start a new extraction.';
@@ -809,6 +1006,7 @@
         }
 
         async function pinCurrentRightToLeft() {
+            if (comparison.livePreview) return;
             if (!comparison.right) return;
             await setLeftReference(comparison.right, true);
         }
@@ -834,21 +1032,126 @@
             return lines;
         }
 
+        function normalizeLineForMatching(line) {
+            return String(line ?? '')
+                .trim()
+                .toLowerCase()
+                .replace(/^[-*+]\s+/, '')
+                .replace(/^\d+\.\s+/, '')
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 $2')
+                .replace(/[^\p{L}\p{N}:/._ -]+/gu, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        function pushAlignedLines(rows, leftLine, rightLine, leftNumberRef, rightNumberRef) {
+            const hasLeft = leftLine !== null;
+            const hasRight = rightLine !== null;
+            let kind = 'changed';
+            if (hasLeft && !hasRight) kind = 'removed';
+            else if (!hasLeft && hasRight) kind = 'added';
+            else if (leftLine === rightLine) kind = 'same';
+            rows.push({
+                kind,
+                leftNumber: hasLeft ? leftNumberRef.value++ : '',
+                leftText: hasLeft ? leftLine : '',
+                rightNumber: hasRight ? rightNumberRef.value++ : '',
+                rightText: hasRight ? rightLine : ''
+            });
+        }
+
+        function alignChangedLines(leftLines, rightLines) {
+            const leftKeys = leftLines.map(normalizeLineForMatching);
+            const rightKeys = rightLines.map(normalizeLineForMatching);
+            const dp = Array.from({ length: leftLines.length + 1 }, () => Array(rightLines.length + 1).fill(0));
+
+            for (let i = leftLines.length - 1; i >= 0; i -= 1) {
+                for (let j = rightLines.length - 1; j >= 0; j -= 1) {
+                    if (leftKeys[i] && leftKeys[i] === rightKeys[j]) {
+                        dp[i][j] = dp[i + 1][j + 1] + 1;
+                    } else {
+                        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+                    }
+                }
+            }
+
+            const pairs = [];
+            let i = 0;
+            let j = 0;
+            while (i < leftLines.length && j < rightLines.length) {
+                if (leftKeys[i] && leftKeys[i] === rightKeys[j]) {
+                    pairs.push([i, j]);
+                    i += 1;
+                    j += 1;
+                } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+                    i += 1;
+                } else {
+                    j += 1;
+                }
+            }
+            return pairs;
+        }
+
         function pushAlignedBlock(rows, leftLines, rightLines, leftNumberRef, rightNumberRef) {
-            const span = Math.max(leftLines.length, rightLines.length);
-            for (let i = 0; i < span; i += 1) {
-                const hasLeft = i < leftLines.length;
-                const hasRight = i < rightLines.length;
-                let kind = 'changed';
-                if (hasLeft && !hasRight) kind = 'removed';
-                else if (!hasLeft && hasRight) kind = 'added';
-                rows.push({
-                    kind,
-                    leftNumber: hasLeft ? leftNumberRef.value++ : '',
-                    leftText: hasLeft ? leftLines[i] : '',
-                    rightNumber: hasRight ? rightNumberRef.value++ : '',
-                    rightText: hasRight ? rightLines[i] : ''
-                });
+            const alignedPairs = alignChangedLines(leftLines, rightLines);
+            if (!alignedPairs.length) {
+                const span = Math.max(leftLines.length, rightLines.length);
+                for (let i = 0; i < span; i += 1) {
+                    pushAlignedLines(
+                        rows,
+                        i < leftLines.length ? leftLines[i] : null,
+                        i < rightLines.length ? rightLines[i] : null,
+                        leftNumberRef,
+                        rightNumberRef
+                    );
+                }
+                return;
+            }
+
+            let leftIndex = 0;
+            let rightIndex = 0;
+            for (const [matchedLeft, matchedRight] of alignedPairs) {
+                while (leftIndex < matchedLeft || rightIndex < matchedRight) {
+                    if (leftIndex < matchedLeft && rightIndex < matchedRight) {
+                        pushAlignedLines(
+                            rows,
+                            leftLines[leftIndex++],
+                            rightLines[rightIndex++],
+                            leftNumberRef,
+                            rightNumberRef
+                        );
+                    } else if (leftIndex < matchedLeft) {
+                        pushAlignedLines(rows, leftLines[leftIndex++], null, leftNumberRef, rightNumberRef);
+                    } else {
+                        pushAlignedLines(rows, null, rightLines[rightIndex++], leftNumberRef, rightNumberRef);
+                    }
+                }
+
+                pushAlignedLines(
+                    rows,
+                    leftLines[matchedLeft],
+                    rightLines[matchedRight],
+                    leftNumberRef,
+                    rightNumberRef
+                );
+                leftIndex = matchedLeft + 1;
+                rightIndex = matchedRight + 1;
+            }
+
+            while (leftIndex < leftLines.length || rightIndex < rightLines.length) {
+                if (leftIndex < leftLines.length && rightIndex < rightLines.length) {
+                    pushAlignedLines(
+                        rows,
+                        leftLines[leftIndex++],
+                        rightLines[rightIndex++],
+                        leftNumberRef,
+                        rightNumberRef
+                    );
+                } else if (leftIndex < leftLines.length) {
+                    pushAlignedLines(rows, leftLines[leftIndex++], null, leftNumberRef, rightNumberRef);
+                } else {
+                    pushAlignedLines(rows, null, rightLines[rightIndex++], leftNumberRef, rightNumberRef);
+                }
             }
         }
 
@@ -984,11 +1287,13 @@
         }
 
         async function gradeRight(grade) {
+            if (comparison.livePreview) return;
             if (!comparison.right) return;
             await saveGrade(comparison.right, grade);
         }
 
         async function cycleRight(delta) {
+            if (comparison.livePreview) return;
             if (!activeScore || !comparison.right) return;
             const candidates = activeScore.extractor_results.map(result => result.name).filter(name => name !== comparison.left);
             if (!candidates.length) return;
@@ -1064,6 +1369,123 @@
                         <div class="diff-pane-header">
                             <strong>${escapeHtml(rightResult?.name || 'None')}</strong>
                             <span>Use number keys to grade the right side</span>
+                        </div>
+                    </div>
+                    <div class="diff-grid">
+                        <div class="diff-pane" id="leftDiffPane">${renderDiffPane(diff.left)}</div>
+                        <div class="diff-pane" id="rightDiffPane">${renderDiffPane(diff.right)}</div>
+                    </div>
+                </div>
+            `;
+
+            bindScrollSync();
+            setSummaryCounts();
+        }
+
+        async function handleRightSelection(value) {
+            if (value.startsWith('__live__:')) {
+                await activateLivePreview(value.slice('__live__:'.length));
+                return;
+            }
+            await setRightComparison(value);
+        }
+
+        function renderComparison() {
+            const root = document.getElementById('comparisonRoot');
+            if (!activeScore) {
+                root.innerHTML = '<div class="compare-empty">No extraction selected yet.</div>';
+                setSummaryCounts();
+                return;
+            }
+
+            const leftResult = activeScore.extractor_results.find(result => result.name === comparison.left) || null;
+            const livePreviewEnabled = !!comparison.livePreview;
+            const rightResult = livePreviewEnabled
+                ? comparison.livePreview
+                : activeScore.extractor_results.find(result => result.name === comparison.right) || null;
+            const rightOutput = livePreviewEnabled
+                ? comparison.livePreview.output
+                : activeOutputs[comparison.right] ?? '';
+            const diff = buildAlignedDiff(activeOutputs[comparison.left] ?? '', rightOutput);
+            const canPreviewLeft = isConfigurableExtractor(comparison.left)
+                && activeScore.extractor_results.some(result => result.name === comparison.left);
+            const rightOptions = activeScore.extractor_results
+                .filter(result => result.name !== comparison.left)
+                .map(result => ({
+                    value: result.name,
+                    label: result.name
+                }));
+            if (livePreviewEnabled) {
+                rightOptions.unshift({
+                    value: `__live__:${comparison.livePreview.extractor_key}`,
+                    label: comparison.livePreview.name
+                });
+            }
+            const rightSelectionValue = livePreviewEnabled
+                ? `__live__:${comparison.livePreview.extractor_key}`
+                : comparison.right;
+
+            document.getElementById('compareMeta').textContent =
+                `${activeScore.url} • ${formatTime(activeScore.timestamp)} • ${formatBytes(activeScore.html_size)} source • ${activeScore.extractor_results.length} results saved${livePreviewEnabled ? ' • live settings preview active' : ''}`;
+            document.getElementById('deleteBtn').disabled = false;
+            document.getElementById('swapBtn').disabled = !(leftResult && rightResult) || livePreviewEnabled;
+            document.getElementById('fullscreenBtn').disabled = false;
+            document.getElementById('fullscreenBtn').textContent = comparison.fullscreen ? 'Exit Fullscreen' : 'Fullscreen';
+
+            root.innerHTML = `
+                <div class="compare-meta-row">
+                    <div class="compare-meta-card">
+                        <strong>${escapeHtml(leftResult?.name || 'None')}</strong>
+                        <span>${leftResult ? `${formatBytes(leftResult.output_size)} • ${leftResult.reduction_percent.toFixed(1)}% smaller • ${formatMicros(leftResult.time_micros)}${activeScore.grades?.[leftResult.name] !== undefined ? ` • grade ${activeScore.grades[leftResult.name]}` : ''}` : 'No left selection'}</span>
+                    </div>
+                    <div class="compare-meta-card">
+                        <strong>${escapeHtml(rightResult?.name || 'None')}</strong>
+                        <span>${rightResult ? `${formatBytes(rightResult.output_size)} • ${rightResult.reduction_percent.toFixed(1)}% smaller • ${formatMicros(rightResult.time_micros)}${comparison.livePreviewPending ? ' • refreshing' : ''}${!livePreviewEnabled && activeScore.grades?.[rightResult.name] !== undefined ? ` • grade ${activeScore.grades[rightResult.name]}` : ''}` : 'No right selection'}</span>
+                    </div>
+                </div>
+
+                <div class="compare-controls">
+                    <select onchange="setLeftReference(this.value, comparison.pinnedLeft === this.value)">
+                        ${activeScore.extractor_results.map(result => `<option value="${escapeHtml(result.name)}" ${result.name === comparison.left ? 'selected' : ''}>${escapeHtml(result.name)}</option>`).join('')}
+                    </select>
+                    <select onchange="handleRightSelection(this.value)">
+                        ${rightOptions.map(option => `<option value="${escapeHtml(option.value)}" ${option.value === rightSelectionValue ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
+                    </select>
+                    <button class="${comparison.pinnedLeft === comparison.left ? '' : 'secondary'}" onclick="togglePinCurrentLeft()">${comparison.pinnedLeft === comparison.left ? 'Pinned Left' : 'Pin Left'}</button>
+                    ${canPreviewLeft ? `<button class="${livePreviewEnabled && comparison.livePreview.extractor_key === comparison.left ? '' : 'secondary'}" onclick="${livePreviewEnabled && comparison.livePreview.extractor_key === comparison.left ? 'clearLivePreview({ render: true })' : `activateLivePreview('${comparison.left}')`}">${livePreviewEnabled && comparison.livePreview.extractor_key === comparison.left ? 'Stop Live Preview' : 'Preview Left Settings'}</button>` : ''}
+                </div>
+
+                <div class="right-selector">
+                    ${livePreviewEnabled ? `
+                        <button class="selector-pill active" onclick="activateLivePreview('${comparison.livePreview.extractor_key}')">
+                            ${escapeHtml(comparison.livePreview.name)}
+                        </button>
+                    ` : ''}
+                    ${activeScore.extractor_results.filter(result => result.name !== comparison.left).map(result => `
+                        <button class="selector-pill ${!livePreviewEnabled && result.name === comparison.right ? 'active' : ''}" onclick="setRightComparison('${result.name}')">
+                            ${escapeHtml(result.name)}
+                            ${activeScore.grades?.[result.name] !== undefined ? `<span class="grade">${activeScore.grades[result.name]}</span>` : ''}
+                        </button>
+                    `).join('')}
+                </div>
+
+                <div class="diff-summary">
+                    <span class="diff-badge">${diff.summary.same} same</span>
+                    <span class="diff-badge">${diff.summary.changed} changed</span>
+                    <span class="diff-badge">${diff.summary.added} added</span>
+                    <span class="diff-badge">${diff.summary.removed} removed</span>
+                    <span class="diff-badge">${diff.summary.collapsed} collapsed</span>
+                </div>
+
+                <div class="diff-wrap">
+                    <div class="diff-header">
+                        <div class="diff-pane-header">
+                            <strong>${escapeHtml(leftResult?.name || 'None')}</strong>
+                            <span>${comparison.pinnedLeft === comparison.left ? 'Pinned reference' : 'Reference candidate'}</span>
+                        </div>
+                        <div class="diff-pane-header">
+                            <strong>${escapeHtml(rightResult?.name || 'None')}</strong>
+                            <span>${livePreviewEnabled ? 'Live settings preview updates in place while you edit' : 'Use number keys to grade the right side'}</span>
                         </div>
                     </div>
                     <div class="diff-grid">

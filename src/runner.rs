@@ -9,6 +9,7 @@ pub struct Stats {
     pub time_micros: u64,
     pub output_size: usize,
     pub panicked: bool,
+    pub error: String,
 }
 
 pub struct Runner {
@@ -28,26 +29,44 @@ impl Runner {
 
     pub fn run(&mut self, name: impl Into<String>, extractor: impl Fn(&str) -> String) {
         let name = name.into();
-        let (output, time_micros, panicked) =
+        let (output, time_micros, panicked, error) =
             match std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let start = Instant::now();
-                let output = extractor(&self.html);
+                let result = extractor(&self.html);
                 let time_micros = start.elapsed().as_micros() as u64;
-                (output, time_micros)
+                (result, time_micros)
             })) {
-                Ok((output, time_micros)) => (output, time_micros, false),
-                Err(_) => (String::new(), 0, true),
+                Ok((output, time_micros)) => (output, time_micros, false, String::new()),
+                Err(e) => {
+                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic".to_string()
+                    };
+                    (String::new(), 0, true, msg)
+                }
             };
+
+        let final_output = if !error.is_empty() {
+            format!("[ERROR] {}\n", error)
+        } else if output.is_empty() {
+            "[ERROR] empty output — tool may not be installed, crashed, or returned no content]\n".to_string()
+        } else {
+            output.clone()
+        };
 
         self.stats.push(Stats {
             name: name.clone(),
             time_micros,
-            output_size: output.len(),
+            output_size: final_output.len(),
             panicked,
+            error,
         });
 
         let output_file = self.out_dir.join(format!("{}.txt", name));
-        let _ = write(&output_file, &output);
+        let _ = write(&output_file, &final_output);
     }
 
     pub fn into_stats(self) -> Vec<Stats> {
@@ -65,6 +84,7 @@ impl Runner {
             "Output Size (bytes)",
             "% Reduction",
             "Panic",
+            "Error",
             "Output File",
         ]);
         let numeric_columns = 1..=2;
@@ -85,6 +105,7 @@ impl Runner {
                     100.0 - (stat.output_size as f64 / self.html.len() as f64) * 100.0
                 ),
                 if stat.panicked { "YES" } else { "no" },
+                if stat.error.is_empty() { "-" } else { &stat.error },
                 &format!(
                     "{}",
                     self.out_dir.join(format!("{}.txt", stat.name)).display()
