@@ -1,3 +1,4 @@
+use crate::boilerplate;
 use crate::extractor_config::{ExtractorConfig, ExtractorState, ExtractorStates};
 use crate::scores::ScoreStore;
 use axum::{
@@ -46,6 +47,7 @@ pub async fn start_server(port: u16, data_dir: PathBuf) -> Result<(), String> {
         .route("/scores/{id}/output/{name}", get(get_output))
         .route("/scores/{id}/preview-settings", post(preview_settings))
         .route("/scores/{id}/compare-settings", post(compare_settings))
+        .route("/scores/{id}/boilerplate-diff", post(run_boilerplate_diff))
         .route("/run", post(run_extraction))
         .route("/run-single", post(run_single_extraction))
         .route("/t/{name}/{enabled}", post(toggle_extractor))
@@ -224,6 +226,33 @@ async fn preview_settings(
         candidate_config,
     );
     Json(preview).into_response()
+}
+
+async fn run_boilerplate_diff(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<BoilerplateDiffRequest>,
+) -> impl IntoResponse {
+    let base_score = match state.score_store.load(&id) {
+        Ok(score) => score,
+        Err(_) => return (StatusCode::NOT_FOUND, "Score not found").into_response(),
+    };
+
+    let html = match load_score_source_html(&base_score).await {
+        Ok(content) => content,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+
+    let states = state.extractor_states.read().await.clone();
+    match boilerplate::analyze_boilerplate_diff(
+        &base_score.url,
+        &html,
+        &states,
+        payload.sample_count.unwrap_or(5),
+    ) {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+    }
 }
 
 async fn toggle_extractor(
@@ -555,6 +584,11 @@ pub struct SingleRunRequest {
 pub struct GradeRequest {
     pub extractor: String,
     pub grade: u8,
+}
+
+#[derive(serde::Deserialize)]
+pub struct BoilerplateDiffRequest {
+    pub sample_count: Option<usize>,
 }
 
 static HTML: &str = include_str!("web_ui.html");

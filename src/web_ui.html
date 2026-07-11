@@ -279,8 +279,7 @@
             font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
             font-size: 0.75rem;
             line-height: 1.42;
-            white-space: pre-wrap;
-            word-break: break-word;
+            white-space: pre;
         }
         .diff-line.same { background: transparent; }
         .diff-line.added { background: rgba(139, 247, 210, 0.08); }
@@ -305,6 +304,165 @@
             color: var(--muted);
             font-size: 0.7rem;
             font-weight: 700;
+        }
+        .workspace-tabs {
+            display: flex;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.75rem;
+        }
+        .workspace-tab {
+            background: rgba(146, 177, 214, 0.08);
+            color: var(--muted);
+            border: 1px solid rgba(146, 177, 214, 0.14);
+        }
+        .workspace-tab.active {
+            background: linear-gradient(135deg, rgba(97, 218, 251, 0.18), rgba(139, 247, 210, 0.15));
+            color: var(--text);
+            border-color: rgba(97, 218, 251, 0.24);
+        }
+        .prototype-shell {
+            display: grid;
+            gap: 0.75rem;
+            min-height: 0;
+        }
+        .prototype-summary {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.4rem;
+        }
+        .prototype-card {
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.6rem;
+            min-width: 0;
+        }
+        .prototype-card strong {
+            display: block;
+            font-size: 0.95rem;
+            margin-bottom: 0.14rem;
+        }
+        .prototype-card span {
+            display: block;
+            color: var(--muted);
+            font-size: 0.74rem;
+            overflow-wrap: anywhere;
+        }
+        .prototype-actions {
+            display: flex;
+            gap: 0.45rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .prototype-actions button {
+            flex: 0 0 auto;
+        }
+        .prototype-grid {
+            display: grid;
+            gap: 0.75rem;
+            min-height: 0;
+        }
+        .prototype-samples,
+        .prototype-document {
+            background: rgba(10, 18, 31, 0.84);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 0.7rem;
+            min-width: 0;
+            min-height: 0;
+        }
+        .prototype-samples {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.5rem;
+            align-content: start;
+        }
+        .prototype-document {
+            overflow: auto;
+            max-height: 70vh;
+        }
+        .prototype-doc {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.82rem;
+            line-height: 1.55;
+            color: var(--text);
+        }
+        .prototype-doc-line {
+            display: block;
+            position: relative;
+            white-space: pre-wrap;
+            word-break: break-word;
+            padding: 0.08rem 0.5rem;
+            border-radius: 6px;
+            background-image: linear-gradient(
+                90deg,
+                rgba(139, 247, 210, 0.12) 0%,
+                rgba(97, 218, 251, 0.11) var(--overlap-width, 0%),
+                transparent var(--overlap-width, 0%),
+                transparent 100%
+            );
+        }
+        .prototype-doc-line:hover {
+            background-color: rgba(146, 177, 214, 0.06);
+        }
+        .prototype-doc-line.blank {
+            min-height: 1.2em;
+            background-image: none;
+            opacity: 0.55;
+        }
+        .prototype-doc-line::after {
+            content: attr(data-overlap);
+            position: absolute;
+            top: 0.08rem;
+            right: 0.5rem;
+            color: rgba(146, 177, 214, 0.85);
+            font-size: 0.68rem;
+            opacity: 0;
+            transition: opacity 120ms ease;
+            background: rgba(10, 18, 31, 0.82);
+            padding-left: 0.3rem;
+        }
+        .prototype-doc-line:hover::after {
+            opacity: 1;
+        }
+        .prototype-sample-card {
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 0.58rem;
+        }
+        .prototype-document-note {
+            color: var(--muted);
+            font-size: 0.74rem;
+            margin-bottom: 0.55rem;
+        }
+        .prototype-sample-card strong,
+        .prototype-sample-card a {
+            display: block;
+            color: var(--text);
+            font-size: 0.8rem;
+            overflow-wrap: anywhere;
+        }
+        .prototype-sample-card span {
+            display: block;
+            color: var(--muted);
+            font-size: 0.72rem;
+            margin-top: 0.18rem;
+            overflow-wrap: anywhere;
+        }
+        .prototype-warnings {
+            display: grid;
+            gap: 0.3rem;
+        }
+        .prototype-warning {
+            border-radius: 10px;
+            padding: 0.5rem 0.64rem;
+            background: rgba(255, 107, 107, 0.08);
+            border: 1px solid rgba(255, 107, 107, 0.18);
+            color: #ffd0d0;
+            font-size: 0.76rem;
+            overflow-wrap: anywhere;
         }
         .scores-list { display: grid; gap: 0.5rem; }
         .score-card {
@@ -346,6 +504,7 @@
         @media (max-width: 900px) {
             .compare-controls, .compare-meta-row, .variant-grid, .config-grid { grid-template-columns: 1fr; }
             .diff-header, .diff-grid { grid-template-columns: 1fr; }
+            .prototype-summary { grid-template-columns: 1fr; }
             .diff-pane, .diff-pane-header { border-right: none; }
             .diff-pane-header { border-bottom: 1px solid var(--border); }
             .score-card { flex-direction: column; }
@@ -430,7 +589,14 @@
                         </div>
                     </div>
                     <div class="panel-body" id="comparisonRoot">
-                        <div class="compare-empty">No extraction selected yet.</div>
+                        <div class="workspace-tabs">
+                            <button class="workspace-tab active" id="compareTabBtn" onclick="setWorkspaceTab('compare')">Comparison</button>
+                            <button class="workspace-tab" id="boilerplateTabBtn" onclick="setWorkspaceTab('boilerplate')">Boilerplate Diff POC</button>
+                        </div>
+                        <div id="comparisonTabPanel">
+                            <div class="compare-empty">No extraction selected yet.</div>
+                        </div>
+                        <div id="boilerplateTabPanel" hidden></div>
                     </div>
                 </section>
 
@@ -600,7 +766,9 @@
         let scores = [];
         let activeScore = null;
         let activeOutputs = {};
+        let workspaceTab = 'compare';
         let comparison = { left: null, right: null, pinnedLeft: null, fullscreen: false, livePreview: null, livePreviewPending: false };
+        let boilerplateState = { loading: false, result: null, error: null, scoreId: null, sampleCount: 5 };
         let scrollSyncLock = false;
         const configPersistTimers = {};
         let livePreviewRefreshTimer = null;
@@ -618,6 +786,34 @@
         function formatBytes(value) { return new Intl.NumberFormat().format(value) + ' B'; }
         function formatMicros(value) { return new Intl.NumberFormat().format(value) + ' us'; }
         function formatTime(unixSeconds) { return new Date(Number(unixSeconds) * 1000).toLocaleString(); }
+        function formatPercent(value, digits = 1) { return `${Number(value || 0).toFixed(digits)}%`; }
+
+        function renderWorkspacePanels() {
+            const comparePanel = document.getElementById('comparisonTabPanel');
+            const boilerplatePanel = document.getElementById('boilerplateTabPanel');
+            const compareTabBtn = document.getElementById('compareTabBtn');
+            const boilerplateTabBtn = document.getElementById('boilerplateTabBtn');
+            const showingCompare = workspaceTab === 'compare';
+            comparePanel.hidden = !showingCompare;
+            boilerplatePanel.hidden = showingCompare;
+            compareTabBtn.classList.toggle('active', showingCompare);
+            boilerplateTabBtn.classList.toggle('active', !showingCompare);
+        }
+
+        function setWorkspaceTab(tab) {
+            workspaceTab = tab === 'boilerplate' ? 'boilerplate' : 'compare';
+            renderWorkspacePanels();
+            renderActiveWorkspace();
+        }
+
+        function renderActiveWorkspace() {
+            renderWorkspacePanels();
+            if (workspaceTab === 'boilerplate') {
+                renderBoilerplatePrototype();
+                return;
+            }
+            renderComparison();
+        }
 
         function enabledExtractorCount(snapshot) {
             const source = snapshot?.states || {};
@@ -760,7 +956,7 @@
                 clearTimeout(livePreviewRefreshTimer);
                 livePreviewRefreshTimer = null;
             }
-            if (render) renderComparison();
+            if (render) renderActiveWorkspace();
         }
 
         function scheduleLivePreviewRefresh(extractor, delay = 180) {
@@ -775,7 +971,7 @@
             if (!activeScore) return;
             const requestId = ++livePreviewRequestId;
             comparison.livePreviewPending = true;
-            renderComparison();
+            renderActiveWorkspace();
             try {
                 const res = await fetch(`/scores/${activeScore.id}/preview-settings`, {
                     method: 'POST',
@@ -790,14 +986,14 @@
                 if (requestId !== livePreviewRequestId) return;
                 comparison.livePreview = preview;
                 comparison.livePreviewPending = false;
-                renderComparison();
+                renderActiveWorkspace();
                 if (announce) {
                     setStatus('success', `${extractor} settings preview updated in place.`);
                 }
             } catch (e) {
                 if (requestId !== livePreviewRequestId) return;
                 comparison.livePreviewPending = false;
-                renderComparison();
+                renderActiveWorkspace();
                 setStatus('error', e.message);
             }
         }
@@ -827,7 +1023,7 @@
             };
             comparison.livePreviewPending = true;
             await ensureOutputLoaded(comparison.left);
-            renderComparison();
+            renderActiveWorkspace();
             await refreshLivePreview(extractor, announce);
         }
 
@@ -971,9 +1167,9 @@
                 });
                 if (!res.ok) throw new Error(await res.text());
                 const score = await res.json();
-                status.innerHTML = '<div class="success">Extraction finished. Opening fullscreen comparison.</div>';
+                status.innerHTML = '<div class="success">Extraction finished. Opening comparison.</div>';
                 await loadScores();
-                await openScore(score.id, true);
+                await openScore(score.id, false);
             } catch (e) {
                 status.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
             } finally {
@@ -1063,11 +1259,12 @@
         async function openScore(id, fullscreen) {
             const res = await fetch(`/scores/${id}`);
             if (!res.ok) {
-                document.getElementById('comparisonRoot').innerHTML = '<div class="error">Failed to load score.</div>';
+                document.getElementById('comparisonTabPanel').innerHTML = '<div class="error">Failed to load score.</div>';
                 return;
             }
             activeScore = await res.json();
             activeOutputs = {};
+            boilerplateState = { ...boilerplateState, loading: false, result: null, error: null, scoreId: activeScore.id };
             const successful = activeScore.extractor_results.filter(result => !result.panicked);
             const pinned = getHistoricalPinnedExtractor(activeScore);
             const left = pinned && successful.some(result => result.name === pinned)
@@ -1083,7 +1280,7 @@
             await ensureOutputLoaded(left);
             if (right && right !== left) await ensureOutputLoaded(right);
             setFullscreen(fullscreen);
-            renderComparison();
+            renderActiveWorkspace();
         }
 
         async function ensureOutputLoaded(name) {
@@ -1111,7 +1308,7 @@
             } else if (comparison.right) {
                 await ensureOutputLoaded(comparison.right);
             }
-            renderComparison();
+            renderActiveWorkspace();
         }
 
         async function setRightComparison(name) {
@@ -1123,7 +1320,7 @@
             }
             await ensureOutputLoaded(comparison.left);
             await ensureOutputLoaded(comparison.right);
-            renderComparison();
+            renderActiveWorkspace();
         }
 
         async function swapComparison() {
@@ -1133,7 +1330,7 @@
             comparison.right = oldLeft;
             await ensureOutputLoaded(comparison.left);
             await ensureOutputLoaded(comparison.right);
-            renderComparison();
+            renderActiveWorkspace();
         }
 
         async function deleteActiveScore() {
@@ -1142,8 +1339,10 @@
             activeScore = null;
             activeOutputs = {};
             comparison = { left: null, right: null, pinnedLeft: null, fullscreen: false, livePreview: null, livePreviewPending: false };
+            boilerplateState = { ...boilerplateState, loading: false, result: null, error: null, scoreId: null };
             setFullscreen(false);
-            document.getElementById('comparisonRoot').innerHTML = '<div class="compare-empty">Run deleted.</div>';
+            document.getElementById('comparisonTabPanel').innerHTML = '<div class="compare-empty">Run deleted.</div>';
+            document.getElementById('boilerplateTabPanel').innerHTML = '';
             document.getElementById('compareMeta').textContent = 'Select a run to inspect, or start a new extraction.';
             document.getElementById('deleteBtn').disabled = true;
             document.getElementById('swapBtn').disabled = true;
@@ -1154,7 +1353,7 @@
         function togglePinCurrentLeft() {
             if (!comparison.left) return;
             comparison.pinnedLeft = comparison.left;
-            renderComparison();
+            renderActiveWorkspace();
         }
 
         async function pinCurrentRightToLeft() {
@@ -1435,7 +1634,7 @@
             activeScore = await res.json();
             scores = scores.map(score => score.id === activeScore.id ? activeScore : score);
             renderScores();
-            renderComparison();
+            renderActiveWorkspace();
         }
 
         async function gradeRight(grade) {
@@ -1462,10 +1661,172 @@
             await setRightComparison(value);
         }
 
+        function renderBoilerplatePrototype() {
+            const root = document.getElementById('boilerplateTabPanel');
+            document.getElementById('fullscreenBtn').disabled = true;
+            document.getElementById('swapBtn').disabled = true;
+            document.getElementById('fullscreenBtn').textContent = 'Fullscreen';
+
+            if (!activeScore) {
+                document.getElementById('compareMeta').textContent = 'Open a saved run to analyze recurring markdownify lines across related pages.';
+                document.getElementById('deleteBtn').disabled = true;
+                root.innerHTML = '<div class="compare-empty">No extraction selected yet.</div>';
+                setSummaryCounts();
+                return;
+            }
+
+            document.getElementById('compareMeta').textContent =
+                `${activeScore.url} â€¢ diff-based boilerplate probe using markdownify on up to ${boilerplateState.sampleCount} related links`;
+            document.getElementById('deleteBtn').disabled = false;
+
+            if (boilerplateState.loading) {
+                root.innerHTML = `
+                    <div class="prototype-shell">
+                        <div class="loading">Fetching related links, converting them with markdownify, and diffing line overlap against the opened page...</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const result = boilerplateState.scoreId === activeScore.id ? boilerplateState.result : null;
+            const error = boilerplateState.scoreId === activeScore.id ? boilerplateState.error : null;
+            if (!result && !error) {
+                root.innerHTML = `
+                    <div class="prototype-shell">
+                        <div class="prototype-actions">
+                            <button onclick="runBoilerplatePrototype()" id="runBoilerplateBtn">Run Prototype</button>
+                            <div class="keyboard-hint">Starts from the opened page, prefers links under the same URL prefix, runs markdownify on each page, then measures how often each target line survives line-based diffs.</div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            if (error) {
+                root.innerHTML = `
+                    <div class="prototype-shell">
+                        <div class="prototype-actions">
+                            <button onclick="runBoilerplatePrototype()" id="runBoilerplateBtn">Retry Prototype</button>
+                            <div class="keyboard-hint">The prototype stops when markdownify or link discovery fails.</div>
+                        </div>
+                        <div class="error">${escapeHtml(error)}</div>
+                    </div>
+                `;
+                return;
+            }
+
+            root.innerHTML = `
+                <div class="prototype-shell">
+                    <div class="prototype-actions">
+                        <button onclick="runBoilerplatePrototype()" id="runBoilerplateBtn">Refresh Prototype</button>
+                        <div class="keyboard-hint">${escapeHtml(result.selection_strategy)}</div>
+                    </div>
+
+                    <div class="prototype-summary">
+                        <div class="prototype-card">
+                            <strong>${result.compared_links}</strong>
+                            <span>Compared links out of ${result.requested_links} requested</span>
+                        </div>
+                        <div class="prototype-card">
+                            <strong>${result.eligible_target_lines}</strong>
+                            <span>Non-blank target lines scored for overlap</span>
+                        </div>
+                        <div class="prototype-card">
+                            <strong>${result.target_line_count}</strong>
+                            <span>Total target markdown lines from markdownify</span>
+                        </div>
+                        <div class="prototype-card">
+                            <strong>${result.samples.filter(sample => sample.tier === 'same-prefix').length}</strong>
+                            <span>Samples that stayed under the preferred URL prefix</span>
+                        </div>
+                    </div>
+
+                    ${result.warnings?.length ? `
+                        <div class="prototype-warnings">
+                            ${result.warnings.map(warning => `<div class="prototype-warning">${escapeHtml(warning)}</div>`).join('')}
+                        </div>
+                    ` : ''}
+
+                    <div class="prototype-grid">
+                        <div class="prototype-samples">
+                            ${result.samples.map(sample => `
+                                <div class="prototype-sample-card">
+                                    <a href="${escapeHtml(sample.url)}" target="_blank" rel="noreferrer">${escapeHtml(sample.url)}</a>
+                                    <span>${escapeHtml(sample.tier)} â€¢ ${sample.markdown_line_count} markdown lines â€¢ matched ${sample.matched_target_lines} target lines (${formatPercent(sample.matched_target_percent)})</span>
+                                </div>
+                            `).join('')}
+                        </div>
+
+                        <div class="prototype-document">
+                            <div class="prototype-document-note">Continuous markdown view. Hover a line to see its exact overlap. Darker fill means the line repeated on more of the sampled pages.</div>
+                            <div class="prototype-doc">
+                                ${result.lines.map(line => `
+                                    <div
+                                        class="prototype-doc-line ${line.is_blank ? 'blank' : ''}"
+                                        style="--overlap-width:${line.is_blank ? 0 : line.overlap_percent}%"
+                                        data-overlap="${line.is_blank ? '' : `${formatPercent(line.overlap_percent, 0)} overlap â€¢ ${line.overlap_count}/${result.compared_links}`}"
+                                        title="${line.is_blank ? `Line ${line.line_number}: blank line` : `Line ${line.line_number}: ${formatPercent(line.overlap_percent, 1)} overlap (${line.overlap_count}/${result.compared_links})`}"
+                                    >${escapeHtml(line.text || ' ')}</div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function runBoilerplatePrototype() {
+            if (!activeScore) {
+                setStatus('error', 'Open a saved run before starting the boilerplate diff prototype.');
+                return;
+            }
+
+            boilerplateState = {
+                ...boilerplateState,
+                loading: true,
+                error: null,
+                result: null,
+                scoreId: activeScore.id,
+            };
+            renderActiveWorkspace();
+
+            try {
+                const res = await fetch(`/scores/${activeScore.id}/boilerplate-diff`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sample_count: boilerplateState.sampleCount })
+                });
+                if (!res.ok) throw new Error(await res.text());
+                boilerplateState = {
+                    ...boilerplateState,
+                    loading: false,
+                    error: null,
+                    result: await res.json(),
+                    scoreId: activeScore.id,
+                };
+                setStatus('success', 'Boilerplate diff prototype finished.');
+            } catch (e) {
+                boilerplateState = {
+                    ...boilerplateState,
+                    loading: false,
+                    error: e.message,
+                    result: null,
+                    scoreId: activeScore.id,
+                };
+                setStatus('error', e.message);
+            }
+            renderActiveWorkspace();
+        }
+
         function renderComparison() {
-            const root = document.getElementById('comparisonRoot');
+            const root = document.getElementById('comparisonTabPanel');
             if (!activeScore) {
                 root.innerHTML = '<div class="compare-empty">No extraction selected yet.</div>';
+                document.getElementById('deleteBtn').disabled = true;
+                document.getElementById('swapBtn').disabled = true;
+                document.getElementById('fullscreenBtn').disabled = true;
+                document.getElementById('fullscreenBtn').textContent = 'Fullscreen';
+                document.getElementById('compareMeta').textContent = 'Select a run to inspect, or start a new extraction.';
                 setSummaryCounts();
                 return;
             }

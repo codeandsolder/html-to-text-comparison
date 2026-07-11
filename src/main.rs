@@ -1,3 +1,4 @@
+mod boilerplate;
 mod extractor_config;
 mod runner;
 mod scores;
