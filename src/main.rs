@@ -6,8 +6,6 @@ mod web;
 
 use extractor_config::ExtractorStates;
 
-#[allow(unused_imports)]
-use scores::run_cli_extractor;
 
 use std::path::PathBuf;
 use std::process::exit;
