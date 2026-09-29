@@ -6,7 +6,6 @@ mod web;
 
 use extractor_config::ExtractorStates;
 
-
 use std::path::PathBuf;
 use std::process::exit;
 
