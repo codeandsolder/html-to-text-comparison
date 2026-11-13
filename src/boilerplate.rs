@@ -57,7 +57,7 @@ enum CandidateTier {
 }
 
 impl CandidateTier {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::SamePrefix => "same-prefix",
             Self::SameOrigin => "same-origin",
@@ -232,18 +232,15 @@ fn collect_candidate_links(
 
     let strategy = if same_prefix_count >= requested_links {
         format!(
-            "Found {} links under the `{}` URL prefix and sampled only from that group.",
-            same_prefix_count, prefix
+            "Found {same_prefix_count} links under the `{prefix}` URL prefix and sampled only from that group."
         )
     } else if same_prefix_count + same_origin_count >= requested_links {
         format!(
-            "Found {} same-prefix links under `{}` and filled the remaining slots from {} other same-origin links.",
-            same_prefix_count, prefix, same_origin_count
+            "Found {same_prefix_count} same-prefix links under `{prefix}` and filled the remaining slots from {same_origin_count} other same-origin links."
         )
     } else {
         format!(
-            "Found {} same-prefix links under `{}`, {} other same-origin links, and {} additional HTTP links. The sample spills outside the preferred prefix because the page did not expose enough close matches.",
-            same_prefix_count, prefix, same_origin_count, other_http_count
+            "Found {same_prefix_count} same-prefix links under `{prefix}`, {same_origin_count} other same-origin links, and {other_http_count} additional HTTP links. The sample spills outside the preferred prefix because the page did not expose enough close matches."
         )
     };
 
@@ -329,7 +326,7 @@ fn split_markdown_lines(text: &str) -> Vec<String> {
         .split('\n')
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
-    if lines.len() > 1 && lines.last().is_some_and(|line| line.is_empty()) {
+    if lines.len() > 1 && lines.last().is_some_and(std::string::String::is_empty) {
         lines.pop();
     }
     lines

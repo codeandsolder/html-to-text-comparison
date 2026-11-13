@@ -21,11 +21,11 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(out_dir: PathBuf, html: String) -> Self {
+    pub const fn new(out_dir: PathBuf, html: String) -> Self {
         Self::with_timeout(out_dir, html, Duration::from_secs(10))
     }
 
-    pub fn with_timeout(out_dir: PathBuf, html: String, timeout: Duration) -> Self {
+    pub const fn with_timeout(out_dir: PathBuf, html: String, timeout: Duration) -> Self {
         Self {
             out_dir,
             html,
@@ -40,7 +40,7 @@ impl Runner {
         extractor: impl FnOnce(&str) -> String + Send + 'static,
     ) {
         let name = name.into();
-        let output_file = self.out_dir.join(format!("{}.txt", name));
+        let output_file = self.out_dir.join(format!("{name}.txt"));
         let html = self.html.clone();
         let timeout = self.timeout;
         eprintln!(
@@ -54,7 +54,7 @@ impl Runner {
             let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let start = Instant::now();
                 let result = extractor(&html);
-                let time_micros = start.elapsed().as_micros() as u64;
+                let time_micros = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
                 (result, time_micros)
             }));
             let _ = tx.send(result);
@@ -95,12 +95,12 @@ impl Runner {
         };
 
         let final_output = if !error.is_empty() {
-            format!("[ERROR] {}\n", error)
+            format!("[ERROR] {error}\n")
         } else if output.is_empty() {
             "[ERROR] empty output — tool may not be installed, crashed, or returned no content]\n"
                 .to_string()
         } else {
-            output.clone()
+            output
         };
 
         self.stats.push(Stats {
@@ -124,7 +124,7 @@ impl Runner {
     }
 
     pub fn into_table(self) -> Table {
-        let mut stats = self.stats.clone();
+        let mut stats = self.stats;
         stats.sort_by_key(|s| s.name.clone());
 
         let mut table = Table::new();
@@ -139,10 +139,9 @@ impl Runner {
         ]);
         let numeric_columns = 1..=2;
         for column in numeric_columns {
-            table
-                .column_mut(column)
-                .unwrap()
-                .set_cell_alignment(CellAlignment::Right);
+            if let Some(column) = table.column_mut(column) {
+                column.set_cell_alignment(CellAlignment::Right);
+            }
         }
 
         for stat in &stats {
@@ -152,7 +151,7 @@ impl Runner {
                 &format!("{}", stat.output_size),
                 &format!(
                     "{:.2}%",
-                    100.0 - (stat.output_size as f64 / self.html.len() as f64) * 100.0
+                    (stat.output_size as f64 / self.html.len() as f64).mul_add(-100.0, 100.0)
                 ),
                 if stat.panicked { "YES" } else { "no" },
                 if stat.error.is_empty() {

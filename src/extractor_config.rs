@@ -557,7 +557,7 @@ impl ExtractorStates {
         let defaults = Self::default();
         match std::fs::read_to_string(path) {
             Ok(s) => {
-                if let Ok(loaded) = serde_json::from_str::<ExtractorStates>(&s) {
+                if let Ok(loaded) = serde_json::from_str::<Self>(&s) {
                     let mut merged = defaults;
                     for (name, state) in loaded.states {
                         merged.states.insert(name, state);
@@ -615,7 +615,10 @@ impl Default for ExtractorStates {
                     ..Default::default()
                 },
                 "htmd" => ExtractorConfig {
-                    skip_tags: DEFAULT_SKIP_TAGS.iter().map(|s| s.to_string()).collect(),
+                    skip_tags: DEFAULT_SKIP_TAGS
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect(),
                     htmd: HtmdConfig {
                         skip_tags: vec![
                             "nav".to_string(),
@@ -648,13 +651,14 @@ impl Default for ExtractorStates {
                     ..Default::default()
                 },
                 "dom_smoothie" => ExtractorConfig {
-                    dom_smoothie: DomSmoothieConfig {
-                        ..Default::default()
-                    },
+                    dom_smoothie: Default::default(),
                     ..Default::default()
                 },
                 "html2md-rs" => ExtractorConfig {
-                    skip_tags: DEFAULT_SKIP_TAGS.iter().map(|s| s.to_string()).collect(),
+                    skip_tags: DEFAULT_SKIP_TAGS
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect(),
                     html2md_rs: Html2MdRsConfig {
                         ignore_tags: vec![
                             "nav".to_string(),

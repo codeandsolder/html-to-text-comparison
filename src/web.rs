@@ -56,7 +56,7 @@ pub async fn start_server(port: u16, data_dir: PathBuf) -> Result<(), String> {
         .layer(cors)
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("0.0.0.0:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| e.to_string())?;
@@ -87,7 +87,7 @@ async fn delete_score(State(state): State<AppState>, Path(id): Path<String>) -> 
     };
 
     match state.score_store.delete(&id) {
-        Ok(_) => {
+        Ok(()) => {
             if let Some(output_dir) = score
                 .extractor_results
                 .first()
@@ -161,8 +161,7 @@ async fn compare_settings(
         .settings_snapshot
         .states
         .get(&payload.extractor)
-        .map(|state| state.config.clone())
-        .unwrap_or_default();
+        .map_or_default(|state| state.config.clone());
 
     let candidate_config = if let Some(config) = &payload.config {
         let mut candidate_state = crate::extractor_config::ExtractorState {
@@ -205,13 +204,12 @@ async fn preview_settings(
         .settings_snapshot
         .states
         .get(&payload.extractor)
-        .map(|state| state.config.clone())
-        .unwrap_or_default();
+        .map_or_default(|state| state.config.clone());
 
     let candidate_config = if let Some(config) = &payload.config {
         let mut candidate_state = crate::extractor_config::ExtractorState {
             enabled: true,
-            config: baseline_config.clone(),
+            config: baseline_config,
         };
         apply_extractor_config(&payload.extractor, config, &mut candidate_state);
         candidate_state.config
@@ -278,7 +276,7 @@ async fn toggle_extractor(
                 };
                 cfg.skip_tags = crate::extractor_config::DEFAULT_SKIP_TAGS
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect();
             }
             "mdka" => {
@@ -295,9 +293,7 @@ async fn toggle_extractor(
                 }
             }
             "dom_smoothie" => {
-                cfg.dom_smoothie = crate::extractor_config::DomSmoothieConfig {
-                    ..Default::default()
-                }
+                cfg.dom_smoothie = Default::default();
             }
             "august" => cfg.augus_max_width = usize::MAX,
             "html2md-rs" => {
@@ -306,7 +302,7 @@ async fn toggle_extractor(
                 };
                 cfg.skip_tags = crate::extractor_config::DEFAULT_SKIP_TAGS
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect();
             }
             "turndown" => {
@@ -421,7 +417,7 @@ fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut Ex
             if let Some(w) = config
                 .get("max_width")
                 .or_else(|| config.get("augus_max_width"))
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
             {
                 state.config.augus_max_width = w as usize;
             }
@@ -557,13 +553,13 @@ async fn fetch_html(url: &str) -> Result<String, String> {
 }
 
 async fn load_score_source_html(score: &crate::scores::Score) -> Result<String, String> {
-    if !score.source_html_file.is_empty() {
+    if score.source_html_file.is_empty() {
+        fetch_html(&score.url).await
+    } else {
         match std::fs::read_to_string(&score.source_html_file) {
             Ok(content) => Ok(content),
             Err(_) => fetch_html(&score.url).await,
         }
-    } else {
-        fetch_html(&score.url).await
     }
 }
 
