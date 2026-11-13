@@ -1158,7 +1158,21 @@ import json
 import sys
 from pathlib import Path
 
+import nltk
 from wisup_e2m import HtmlParser
+
+# wisup-e2m pins an unstructured release whose built-in NLTK bundle URL
+# is no longer available. Use NLTK's supported package index instead.
+for category, resource in (
+    ("tokenizers", "punkt_tab"),
+    ("taggers", "averaged_perceptron_tagger_eng"),
+):
+    try:
+        nltk.data.find(f"{category}/{resource}")
+    except LookupError:
+        if not nltk.download(resource, quiet=True, raise_on_error=True):
+            raise RuntimeError(f"Could not obtain NLTK resource {resource}")
+
 
 work_dir = Path(sys.argv[1]).resolve()
 input_path = Path(sys.argv[2]).resolve()
