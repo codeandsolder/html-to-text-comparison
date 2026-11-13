@@ -672,7 +672,6 @@ pub fn run_cli_extractor(
             {
                 Ok(response) => {
                     let mut body = String::new();
-                    use std::io::Read;
                     response
                         .into_reader()
                         .read_to_string(&mut body)
