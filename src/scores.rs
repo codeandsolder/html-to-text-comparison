@@ -72,9 +72,9 @@ impl Score {
             );
         }
 
-        let stats = runner.into_stats();
+        let outcomes = runner.into_stats();
         let out_dir = PathBuf::from("/tmp/html-extract").join(&id);
-        let extractor_results: Vec<ExtractorResult> = stats
+        let extractor_results: Vec<ExtractorResult> = outcomes
             .iter()
             .map(|stat| ExtractorResult {
                 name: stat.name.clone(),
@@ -1391,7 +1391,7 @@ mod tests {
 
     #[test]
     fn compare_settings_applies_html2text_config() {
-        let (store, dir) = test_store();
+        let (score_store, dir) = test_store();
         let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
         let baseline = ExtractorConfig {
             html2text: Html2TextConfig {
@@ -1414,7 +1414,7 @@ mod tests {
             "html2text",
             baseline,
             candidate,
-            &store,
+            &score_store,
         );
 
         assert_eq!(score.extractor_results[0].name, "html2text baseline");
@@ -1438,7 +1438,7 @@ mod tests {
 
     #[test]
     fn compare_settings_applies_htmd_heading_style() {
-        let (store, dir) = test_store();
+        let (score_store, dir) = test_store();
         let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
             htmd: HtmdConfig {
@@ -1463,7 +1463,7 @@ mod tests {
             "htmd",
             baseline,
             candidate,
-            &store,
+            &score_store,
         );
 
         let baseline_output =
@@ -1480,7 +1480,7 @@ mod tests {
 
     #[test]
     fn compare_settings_applies_turndown_heading_style() {
-        let (store, dir) = test_store();
+        let (score_store, dir) = test_store();
         let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
             turndown: TurndownConfig {
@@ -1503,7 +1503,7 @@ mod tests {
             "turndown",
             baseline,
             candidate,
-            &store,
+            &score_store,
         );
 
         let baseline_output =
@@ -1533,7 +1533,7 @@ mod tests {
 
     #[test]
     fn compare_settings_applies_percollate_markdown_options() {
-        let (store, dir) = test_store();
+        let (score_store, dir) = test_store();
         let html = "<html><body><pre><code>code</code></pre><hr><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
             percollate: PercollateConfig {
@@ -1558,7 +1558,7 @@ mod tests {
             "percollate",
             baseline,
             candidate,
-            &store,
+            &score_store,
         );
 
         let baseline_output =
@@ -1577,7 +1577,7 @@ mod tests {
 
     #[test]
     fn compare_settings_applies_trafilatura_metadata_option() {
-        let (store, dir) = test_store();
+        let (score_store, dir) = test_store();
         let html = "<html><head><title>Title</title></head><body><article><p>Body</p></article></body></html>";
         let baseline = ExtractorConfig {
             trafilatura: TrafilaturaConfig {
@@ -1600,7 +1600,7 @@ mod tests {
             "trafilatura",
             baseline,
             candidate,
-            &store,
+            &score_store,
         );
 
         let baseline_output =
@@ -1618,7 +1618,7 @@ mod tests {
     #[cfg(feature = "dom_smoothie")]
     #[test]
     fn compare_settings_applies_dom_smoothie_candidate_selection_mode() {
-        let (store, dir) = test_store();
+        let (score_store, dir) = test_store();
         let html = "<html><body><main><div><div><div><div><p>Alice was beginning to get very tired of sitting by her sister on the bank.</p></div></div></div><div><div><div><p>So she was considering in her own mind whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies.</p></div></div></div></main></body></html>";
         let baseline = ExtractorConfig {
             dom_smoothie: crate::extractor_config::DomSmoothieConfig {
@@ -1641,7 +1641,7 @@ mod tests {
             "dom_smoothie",
             baseline,
             candidate,
-            &store,
+            &score_store,
         );
 
         let baseline_output =

@@ -164,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             runner.run(
                 "dom_smoothie",
                 |html| match dom_smoothie::Readability::new(html, None, None) {
-                    Ok(parser) => match parser.parse() {
+                    Ok(mut parser) => match parser.parse() {
                         Ok(result) => result.text_content.to_string(),
                         Err(error) => format!("[ERROR] dom_smoothie parsing failed: {error:?}"),
                     },
