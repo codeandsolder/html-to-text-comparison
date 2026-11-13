@@ -65,13 +65,7 @@ impl Score {
         let states = states.clone();
 
         for extractor_name in enabled_extractors(&states) {
-            run_named_extractor(
-                &mut runner,
-                &states,
-                &parsed_url,
-                extractor_name,
-                extractor_name,
-            );
+            runner.run_isolated(extractor_name, extractor_name, parsed_url.as_str(), &states);
         }
 
         let outcomes = runner.into_stats();
@@ -122,7 +116,7 @@ fn enabled_extractors(states: &ExtractorStates) -> Vec<&str> {
     clippy::too_many_lines,
     reason = "Exhaustive native extractor dispatch retains local per-extractor configurations; future structural splitting must preserve individual feature gates and output equivalence"
 )]
-fn run_named_extractor(
+pub(crate) fn run_named_extractor(
     runner: &mut Runner,
     states: &ExtractorStates,
     parsed_url: &url::Url,
@@ -485,19 +479,17 @@ pub fn compare_single_extractor_settings(
     let mut runner = Runner::new(out_dir.clone(), html.to_string());
     let baseline_name = format!("{extractor} baseline");
     let candidate_name = format!("{extractor} current settings");
-    run_named_extractor(
-        &mut runner,
-        &baseline_states,
-        &parsed_url,
+    runner.run_isolated(
         extractor,
         &baseline_name,
+        parsed_url.as_str(),
+        &baseline_states,
     );
-    run_named_extractor(
-        &mut runner,
-        &candidate_states,
-        &parsed_url,
+    runner.run_isolated(
         extractor,
         &candidate_name,
+        parsed_url.as_str(),
+        &candidate_states,
     );
 
     let extractor_results = runner
@@ -554,7 +546,7 @@ pub fn preview_single_extractor_settings(
     fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
 
     let mut runner = Runner::new(out_dir.clone(), html.to_string());
-    run_named_extractor(&mut runner, &states, &parsed_url, extractor, extractor);
+    runner.run_isolated(extractor, extractor, parsed_url.as_str(), &states);
 
     let stat = runner.into_stats().into_iter().next().unwrap_or_default();
     let output = std::fs::read_to_string(out_dir.join(format!("{extractor}.txt")))
@@ -671,7 +663,28 @@ pub fn run_cli_extractor(
                 .get("html-to-markdown-go")
                 .map_or_default(|s| s.config.html_to_markdown_go.clone()),
         ),
-        _ => String::new(),
+        #[cfg(feature = "reader-lm-api")]
+        "reader-lm-api" => match std::env::var("JINA_API_KEY") {
+            Ok(key) => match ureq::get(&format!("https://r.jina.ai/{parsed_url}"))
+                .set("authorization", &format!("Bearer {key}"))
+                .call()
+            {
+                Ok(response) => {
+                    let mut body = String::new();
+                    use std::io::Read;
+                    response
+                        .into_reader()
+                        .read_to_string(&mut body)
+                        .map_or_else(
+                            |error| format!("[ERROR] reader-lm-api read failed: {error}"),
+                            |_| body,
+                        )
+                }
+                Err(error) => format!("[ERROR] reader-lm-api request failed: {error}"),
+            },
+            Err(error) => format!("[ERROR] reader-lm-api missing API key: {error}"),
+        },
+        _ => format!("[ERROR] unknown extractor: {extractor_key}"),
     }
 }
 
