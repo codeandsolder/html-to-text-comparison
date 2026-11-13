@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, read_to_string};
+use std::io::Read;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -116,7 +117,7 @@ fn enabled_extractors(states: &ExtractorStates) -> Vec<&str> {
     clippy::too_many_lines,
     reason = "Exhaustive native extractor dispatch retains local per-extractor configurations; future structural splitting must preserve individual feature gates and output equivalence"
 )]
-pub(crate) fn run_named_extractor(
+pub fn run_named_extractor(
     runner: &mut Runner,
     states: &ExtractorStates,
     parsed_url: &url::Url,

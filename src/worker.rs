@@ -267,14 +267,13 @@ pub fn execute_isolated(
     };
 
     execute().map_err(|error| {
-        if let Some(seconds) = error.strip_prefix("__timeout__ ") {
-            ExecutionError {
+        error.strip_prefix("__timeout__ ").map_or_else(
+            || ExecutionError::failed(error.clone()),
+            |seconds| ExecutionError {
                 status: ExtractionStatus::TimedOut,
                 message: format!("timed out after {seconds}s; terminated process group"),
-            }
-        } else {
-            ExecutionError::failed(error)
-        }
+            },
+        )
     })
 }
 
