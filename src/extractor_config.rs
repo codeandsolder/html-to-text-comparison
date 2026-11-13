@@ -34,6 +34,10 @@ impl Default for TurndownConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independently configurable flags map directly to the PercollateConfig extractor settings exposed through serde"
+)]
 pub struct PercollateConfig {
     pub inline_images: bool,
     pub hyphenate: bool,
@@ -62,6 +66,10 @@ impl Default for PercollateConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independently configurable flags map directly to the MdreamConfig extractor settings exposed through serde"
+)]
 pub struct MdreamConfig {
     pub minimal: bool,
     pub isolate_main: bool,
@@ -110,6 +118,10 @@ impl Default for MdreamConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independently configurable flags map directly to the TrafilaturaConfig extractor settings exposed through serde"
+)]
 pub struct TrafilaturaConfig {
     pub favor_precision: bool,
     pub favor_recall: bool,
@@ -140,6 +152,10 @@ impl Default for TrafilaturaConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independently configurable flags map directly to the Html2TextPythonConfig extractor settings exposed through serde"
+)]
 pub struct Html2TextPythonConfig {
     pub ignore_links: bool,
     pub ignore_images: bool,
@@ -170,6 +186,10 @@ impl Default for Html2TextPythonConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independently configurable flags map directly to the MarkdownifyConfig extractor settings exposed through serde"
+)]
 pub struct MarkdownifyConfig {
     pub strip: Vec<String>,
     pub convert: Vec<String>,
@@ -306,6 +326,10 @@ impl Default for HtmlToMarkdownGoConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independently configurable flags map directly to the Html2TextConfig extractor settings exposed through serde"
+)]
 pub struct Html2TextConfig {
     pub max_wrap_width: usize,
     pub min_wrap_width: usize,
@@ -436,6 +460,10 @@ impl MdkaConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independently configurable flags map directly to the ReadableReadabilityConfig extractor settings exposed through serde"
+)]
 pub struct ReadableReadabilityConfig {
     pub strip_unlikelys: bool,
     pub weight_classes: bool,
@@ -469,17 +497,17 @@ pub struct DomSmoothieConfig {
 }
 
 impl DomSmoothieConfig {
-    pub fn into_config(self) -> Option<dom_smoothie::Config> {
+    pub fn into_config(self) -> dom_smoothie::Config {
         let text_mode = match self.text_mode.as_str() {
             "raw" => dom_smoothie::TextMode::Raw,
             "formatted" => dom_smoothie::TextMode::Formatted,
-            "markdown" | _ => dom_smoothie::TextMode::Markdown,
+            _ => dom_smoothie::TextMode::Markdown,
         };
         let candidate_select_mode = match self.candidate_select_mode.as_str() {
             "dom_smoothie" => dom_smoothie::CandidateSelectMode::DomSmoothie,
-            "readability" | _ => dom_smoothie::CandidateSelectMode::Readability,
+            _ => dom_smoothie::CandidateSelectMode::Readability,
         };
-        Some(dom_smoothie::Config {
+        dom_smoothie::Config {
             keep_classes: self.keep_classes,
             classes_to_preserve: self.classes_to_preserve,
             max_elements_to_parse: self.max_elements_to_parse.unwrap_or(0),
@@ -490,7 +518,7 @@ impl DomSmoothieConfig {
             candidate_select_mode,
             text_mode,
             ..Default::default()
-        })
+        }
     }
 }
 
@@ -578,6 +606,10 @@ impl ExtractorStates {
 }
 
 impl Default for ExtractorStates {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Defines the independent defaults for each supported extractor; centralized schema inventory must remain exhaustive and auditable"
+    )]
     fn default() -> Self {
         let mut states = std::collections::HashMap::new();
         let all_extractors = [
@@ -651,7 +683,7 @@ impl Default for ExtractorStates {
                     ..Default::default()
                 },
                 "dom_smoothie" => ExtractorConfig {
-                    dom_smoothie: Default::default(),
+                    dom_smoothie: DomSmoothieConfig::default(),
                     ..Default::default()
                 },
                 "html2md-rs" => ExtractorConfig {

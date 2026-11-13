@@ -79,14 +79,15 @@ pub fn analyze_boilerplate_diff(
     let normalized_target_lines = target_lines
         .iter()
         .map(|line| normalize_line(line))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let eligible_target_lines = normalized_target_lines
         .iter()
         .filter(|line| !line.is_empty())
         .count();
 
+    let selector = Selector::parse("a[href]").map_err(|error| error.to_string())?;
     let (candidate_pool, selection_strategy) =
-        collect_candidate_links(&parsed_target_url, target_html, requested_links);
+        collect_candidate_links(&parsed_target_url, target_html, requested_links, &selector);
     if candidate_pool.is_empty() {
         return Err("No HTTP links were found on the target page.".to_string());
     }
@@ -94,9 +95,8 @@ pub fn analyze_boilerplate_diff(
     let mut warnings = Vec::new();
     if candidate_pool.len() < requested_links {
         warnings.push(format!(
-            "Only {} candidate links were discovered for a {}-link sample.",
-            candidate_pool.len(),
-            requested_links
+            "Only {} candidate links were discovered for a {requested_links}-link sample.",
+            candidate_pool.len()
         ));
     }
 
@@ -107,26 +107,13 @@ pub fn analyze_boilerplate_diff(
             break;
         }
 
-        let sample_html = match fetch_html(candidate.url.as_str()) {
-            Ok(html) => html,
+        let (markdown_line_count, normalized_sample_lines) = match read_sample(&candidate, states) {
+            Ok(data) => data,
             Err(error) => {
-                warnings.push(format!("Skipped {}: {}", candidate.url, error));
+                warnings.push(format!("Skipped {}: {error}", candidate.url));
                 continue;
             }
         };
-        let sample_markdown = match markdownify_html(&sample_html, states, &candidate.url) {
-            Ok(markdown) => markdown,
-            Err(error) => {
-                warnings.push(format!("Skipped {}: {}", candidate.url, error));
-                continue;
-            }
-        };
-
-        let sample_lines = split_markdown_lines(&sample_markdown);
-        let normalized_sample_lines = sample_lines
-            .iter()
-            .map(|line| normalize_line(line))
-            .collect::<Vec<_>>();
         let matched_target_lines = accumulate_equal_lines(
             &normalized_target_lines,
             &normalized_sample_lines,
@@ -135,9 +122,12 @@ pub fn analyze_boilerplate_diff(
         compared_samples.push(BoilerplateDiffSample {
             url: candidate.url.to_string(),
             tier: candidate.tier.label().to_string(),
-            markdown_line_count: sample_lines.len(),
+            markdown_line_count,
             matched_target_lines,
-            matched_target_percent: percent(matched_target_lines, eligible_target_lines),
+            matched_target_percent: crate::metrics::percent(
+                matched_target_lines,
+                eligible_target_lines,
+            ),
         });
     }
 
@@ -150,9 +140,8 @@ pub fn analyze_boilerplate_diff(
 
     if compared_samples.len() < requested_links {
         warnings.push(format!(
-            "Compared {} links instead of {} because the remaining candidates failed to fetch or convert with markdownify.",
-            compared_samples.len(),
-            requested_links
+            "Compared {} links instead of {requested_links} because the remaining candidates failed to fetch or convert with markdownify.",
+            compared_samples.len()
         ));
     }
 
@@ -170,7 +159,7 @@ pub fn analyze_boilerplate_diff(
                 overlap_percent: if is_blank {
                     0.0
                 } else {
-                    percent(overlap_count, compared_links)
+                    crate::metrics::percent(overlap_count, compared_links)
                 },
                 is_blank,
             }
@@ -190,10 +179,25 @@ pub fn analyze_boilerplate_diff(
     })
 }
 
+fn read_sample(
+    candidate: &CandidateLink,
+    states: &ExtractorStates,
+) -> Result<(usize, Vec<String>), String> {
+    let html = fetch_html(candidate.url.as_str())?;
+    let markdown = markdownify_html(&html, states, &candidate.url)?;
+    let lines = split_markdown_lines(&markdown);
+    let normalized = lines
+        .iter()
+        .map(|line| normalize_line(line))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((lines.len(), normalized))
+}
+
 fn collect_candidate_links(
     target_url: &Url,
     target_html: &str,
     requested_links: usize,
+    selector: &Selector,
 ) -> (Vec<CandidateLink>, String) {
     let prefix = parent_path_prefix(target_url);
     let mut same_prefix = Vec::new();
@@ -201,7 +205,7 @@ fn collect_candidate_links(
     let mut other_http = Vec::new();
     let mut seen = HashSet::new();
 
-    for url in discover_links(target_url, target_html) {
+    for url in discover_links(target_url, target_html, selector) {
         if !seen.insert(url.to_string()) {
             continue;
         }
@@ -247,11 +251,10 @@ fn collect_candidate_links(
     (ordered, strategy)
 }
 
-fn discover_links(target_url: &Url, html: &str) -> Vec<Url> {
+fn discover_links(target_url: &Url, html: &str, selector: &Selector) -> Vec<Url> {
     let document = Html::parse_document(html);
-    let selector = Selector::parse("a[href]").expect("valid link selector");
     document
-        .select(&selector)
+        .select(selector)
         .filter_map(|node| node.value().attr("href"))
         .filter_map(|href| target_url.join(href).ok())
         .filter(|url| matches!(url.scheme(), "http" | "https"))
@@ -332,35 +335,44 @@ fn split_markdown_lines(text: &str) -> Vec<String> {
     lines
 }
 
-fn normalize_line(line: &str) -> String {
-    static BULLET_RE: OnceLock<Regex> = OnceLock::new();
-    static ORDERED_RE: OnceLock<Regex> = OnceLock::new();
-    static LINK_RE: OnceLock<Regex> = OnceLock::new();
-    static PUNCT_RE: OnceLock<Regex> = OnceLock::new();
-    static SPACE_RE: OnceLock<Regex> = OnceLock::new();
+/// Cached regex compilation failures are propagated rather than crashing the app.
+struct NormalizationPatterns {
+    bullet: Regex,
+    ordered: Regex,
+    link: Regex,
+    punctuation: Regex,
+    whitespace: Regex,
+}
 
+impl NormalizationPatterns {
+    fn compile() -> Result<Self, String> {
+        let compile = |pattern| Regex::new(pattern).map_err(|error| error.to_string());
+        Ok(Self {
+            bullet: compile(r"^[-*+]\s+")?,
+            ordered: compile(r"^\d+\.\s+")?,
+            link: compile(r"\[([^\]]+)\]\(([^)]+)\)")?,
+            punctuation: compile(r"[^\p{L}\p{N}:/._ -]+")?,
+            whitespace: compile(r"\s+")?,
+        })
+    }
+}
+
+fn normalize_line(line: &str) -> Result<String, String> {
+    static PATTERNS: OnceLock<Result<NormalizationPatterns, String>> = OnceLock::new();
+    let rules = PATTERNS
+        .get_or_init(NormalizationPatterns::compile)
+        .as_ref()
+        .map_err(Clone::clone)?;
     let mut normalized = line.trim().to_lowercase();
-    normalized = BULLET_RE
-        .get_or_init(|| Regex::new(r"^[-*+]\s+").expect("valid bullet regex"))
-        .replace(&normalized, "")
-        .into_owned();
-    normalized = ORDERED_RE
-        .get_or_init(|| Regex::new(r"^\d+\.\s+").expect("valid ordered list regex"))
-        .replace(&normalized, "")
-        .into_owned();
-    normalized = LINK_RE
-        .get_or_init(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("valid markdown link regex"))
-        .replace_all(&normalized, "$1 $2")
-        .into_owned();
-    normalized = PUNCT_RE
-        .get_or_init(|| Regex::new(r"[^\p{L}\p{N}:/._ -]+").expect("valid cleanup regex"))
-        .replace_all(&normalized, " ")
-        .into_owned();
-    SPACE_RE
-        .get_or_init(|| Regex::new(r"\s+").expect("valid whitespace regex"))
+    normalized = rules.bullet.replace(&normalized, "").into_owned();
+    normalized = rules.ordered.replace(&normalized, "").into_owned();
+    normalized = rules.link.replace_all(&normalized, "$1 $2").into_owned();
+    normalized = rules.punctuation.replace_all(&normalized, " ").into_owned();
+    Ok(rules
+        .whitespace
         .replace_all(&normalized, " ")
         .trim()
-        .to_string()
+        .to_string())
 }
 
 fn diff_tokens(lines: &[String], prefix: &str) -> Vec<String> {
@@ -406,37 +418,31 @@ fn accumulate_equal_lines(
     matched_target_lines
 }
 
-fn percent(value: usize, total: usize) -> f64 {
-    if total == 0 {
-        0.0
-    } else {
-        value as f64 * 100.0 / total as f64
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parent_path_prefix_prefers_parent_directory() {
-        let nested = Url::parse("https://example.com/docs/api/page.html").unwrap();
-        let top_level = Url::parse("https://example.com/article").unwrap();
-        let root = Url::parse("https://example.com/").unwrap();
+    fn parent_path_prefix_prefers_parent_directory() -> Result<(), Box<dyn std::error::Error>> {
+        let nested = Url::parse("https://example.com/docs/api/page.html")?;
+        let top_level = Url::parse("https://example.com/article")?;
+        let root = Url::parse("https://example.com/")?;
 
         assert_eq!(parent_path_prefix(&nested), "/docs/api/");
         assert_eq!(parent_path_prefix(&top_level), "/");
         assert_eq!(parent_path_prefix(&root), "/");
+        Ok(())
     }
 
     #[test]
-    fn classify_candidate_tier_prefers_same_prefix_before_same_origin() {
-        let target = Url::parse("https://example.com/docs/api/page.html").unwrap();
+    fn classify_candidate_tier_prefers_same_prefix_before_same_origin(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let target = Url::parse("https://example.com/docs/api/page.html")?;
         let prefix = parent_path_prefix(&target);
 
-        let same_prefix = Url::parse("https://example.com/docs/api/other.html").unwrap();
-        let same_origin = Url::parse("https://example.com/blog/post").unwrap();
-        let external = Url::parse("https://other.example.com/docs/api/other.html").unwrap();
+        let same_prefix = Url::parse("https://example.com/docs/api/other.html")?;
+        let same_origin = Url::parse("https://example.com/blog/post")?;
+        let external = Url::parse("https://other.example.com/docs/api/other.html")?;
 
         assert_eq!(
             classify_candidate_tier(&target, &same_prefix, &prefix),
@@ -450,24 +456,25 @@ mod tests {
             classify_candidate_tier(&target, &external, &prefix),
             CandidateTier::AnyHttp
         );
+        Ok(())
     }
 
     #[test]
-    fn accumulate_equal_lines_counts_overlap_per_target_line() {
+    fn accumulate_equal_lines_counts_overlap_per_target_line() -> Result<(), String> {
         let target = vec![
-            normalize_line("Header"),
-            normalize_line("Shared body"),
-            normalize_line("Footer"),
+            normalize_line("Header")?,
+            normalize_line("Shared body")?,
+            normalize_line("Footer")?,
         ];
         let sample_one = vec![
-            normalize_line("Header"),
-            normalize_line("Other body"),
-            normalize_line("Footer"),
+            normalize_line("Header")?,
+            normalize_line("Other body")?,
+            normalize_line("Footer")?,
         ];
         let sample_two = vec![
-            normalize_line("Intro"),
-            normalize_line("Shared body"),
-            normalize_line("Footer"),
+            normalize_line("Intro")?,
+            normalize_line("Shared body")?,
+            normalize_line("Footer")?,
         ];
         let mut counts = vec![0usize; target.len()];
 
@@ -477,5 +484,6 @@ mod tests {
         assert_eq!(matched_one, 2);
         assert_eq!(matched_two, 2);
         assert_eq!(counts, vec![1, 1, 2]);
+        Ok(())
     }
 }

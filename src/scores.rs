@@ -49,15 +49,15 @@ pub struct ExtractorPreview {
 }
 
 impl Score {
-    pub fn new(url: String, html: String, states: &ExtractorStates) -> Self {
+    pub fn new(url: String, html: String, states: &ExtractorStates) -> Result<Self, String> {
         let id = Uuid::new_v4().to_string();
         let timestamp = chrono_lite_now();
         let html_size = html.len();
         let out_dir = PathBuf::from("/tmp/html-extract").join(&id);
-        let _ = fs::create_dir_all(&out_dir);
+        fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
         let source_html_file = out_dir.join("source.html");
-        let _ = fs::write(&source_html_file, &html);
-        let parsed_url = url::Url::parse(&url).expect("run_extraction requires a valid URL");
+        fs::write(&source_html_file, &html).map_err(|error| error.to_string())?;
+        let parsed_url = url::Url::parse(&url).map_err(|error| error.to_string())?;
 
         let mut runner = Runner::new(out_dir, html);
         let states = states.clone();
@@ -80,8 +80,7 @@ impl Score {
                 name: stat.name.clone(),
                 extractor_key: stat.name.clone(),
                 output_size: stat.output_size,
-                reduction_percent: (stat.output_size as f64 / html_size as f64)
-                    .mul_add(-100.0, 100.0),
+                reduction_percent: crate::metrics::reduction_percent(stat.output_size, html_size),
                 time_micros: stat.time_micros,
                 panicked: stat.panicked,
                 output_file: out_dir
@@ -91,7 +90,7 @@ impl Score {
             })
             .collect();
 
-        Self {
+        Ok(Self {
             id,
             url,
             html_size,
@@ -100,7 +99,7 @@ impl Score {
             settings_snapshot: states,
             grades: BTreeMap::new(),
             extractor_results,
-        }
+        })
     }
 }
 
@@ -112,6 +111,10 @@ fn enabled_extractors(states: &ExtractorStates) -> Vec<&str> {
         .collect()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Exhaustive native extractor dispatch retains local per-extractor configurations; future structural splitting must preserve individual feature gates and output equivalence"
+)]
 fn run_named_extractor(
     runner: &mut Runner,
     states: &ExtractorStates,
@@ -125,9 +128,10 @@ fn run_named_extractor(
             let parsed_url = parsed_url.clone();
             runner.run(output_name, move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
-                readability::extractor::extract(&mut html, &parsed_url)
-                    .unwrap()
-                    .text
+                readability::extractor::extract(&mut html, &parsed_url).map_or_else(
+                    |error| format!("[ERROR] readability failed: {error:?}"),
+                    |result| result.text,
+                )
             });
         }
         #[cfg(feature = "llm_readability")]
@@ -135,9 +139,10 @@ fn run_named_extractor(
             let parsed_url = parsed_url.clone();
             runner.run(output_name, move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
-                llm_readability::extractor::extract(&mut html, &parsed_url)
-                    .unwrap()
-                    .text
+                llm_readability::extractor::extract(&mut html, &parsed_url).map_or_else(
+                    |error| format!("[ERROR] llm_readability failed: {error:?}"),
+                    |result| result.text,
+                )
             });
         }
         #[cfg(feature = "html2text")]
@@ -312,12 +317,13 @@ fn run_named_extractor(
                 .map_or_default(|s| s.config.dom_smoothie.clone());
             runner.run(output_name, move |html| {
                 let dom_cfg = cfg;
-                dom_smoothie::Readability::new(html, None, dom_cfg.into_config())
-                    .unwrap()
-                    .parse()
-                    .unwrap()
-                    .text_content
-                    .to_string()
+                match dom_smoothie::Readability::new(html, None, Some(dom_cfg.into_config())) {
+                    Ok(mut parser) => match parser.parse() {
+                        Ok(result) => result.text_content.to_string(),
+                        Err(error) => format!("[ERROR] dom_smoothie parse failed: {error:?}"),
+                    },
+                    Err(error) => format!("[ERROR] dom_smoothie setup failed: {error:?}"),
+                }
             });
         }
         #[cfg(feature = "boilerpipe")]
@@ -379,7 +385,6 @@ fn run_named_extractor(
                         self_link_headings: cfg.clean_self_link_headings,
                         empty_images: cfg.clean_empty_images,
                         empty_link_text: cfg.clean_empty_link_text,
-                        ..Default::default()
                     });
                 }
                 if cfg.minimal
@@ -414,7 +419,6 @@ fn run_named_extractor(
                                 None
                             },
                             process_children: cfg.filter_process_children.then_some(true),
-                            ..Default::default()
                         });
                     }
                     if cfg.isolate_main {
@@ -458,7 +462,7 @@ pub fn compare_single_extractor_settings(
     baseline_config: crate::extractor_config::ExtractorConfig,
     candidate_config: crate::extractor_config::ExtractorConfig,
     score_store: &ScoreStore,
-) -> Score {
+) -> Result<Score, String> {
     let baseline_states = single_extractor_state(extractor, baseline_config);
     let candidate_states = single_extractor_state(extractor, candidate_config);
 
@@ -466,11 +470,10 @@ pub fn compare_single_extractor_settings(
     let timestamp = chrono_lite_now();
     let html_size = html.len();
     let out_dir = PathBuf::from("/tmp/html-extract").join(&id);
-    let _ = fs::create_dir_all(&out_dir);
+    fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
     let source_html_file = out_dir.join("source.html");
-    let _ = fs::write(&source_html_file, html);
-    let parsed_url =
-        url::Url::parse(url).expect("compare_single_extractor_settings requires a valid URL");
+    fs::write(&source_html_file, html).map_err(|error| error.to_string())?;
+    let parsed_url = url::Url::parse(url).map_err(|error| error.to_string())?;
 
     let mut runner = Runner::new(out_dir.clone(), html.to_string());
     let baseline_name = format!("{extractor} baseline");
@@ -497,7 +500,7 @@ pub fn compare_single_extractor_settings(
             name: stat.name.clone(),
             extractor_key: extractor.to_string(),
             output_size: stat.output_size,
-            reduction_percent: (stat.output_size as f64 / html_size as f64).mul_add(-100.0, 100.0),
+            reduction_percent: crate::metrics::reduction_percent(stat.output_size, html_size),
             time_micros: stat.time_micros,
             panicked: stat.panicked,
             output_file: out_dir
@@ -522,8 +525,8 @@ pub fn compare_single_extractor_settings(
         grades: BTreeMap::new(),
         extractor_results,
     };
-    let _ = score_store.save(&score);
-    score
+    score_store.save(&score)?;
+    Ok(score)
 }
 
 pub fn preview_single_extractor_settings(
@@ -531,31 +534,30 @@ pub fn preview_single_extractor_settings(
     html: &str,
     extractor: &str,
     config: crate::extractor_config::ExtractorConfig,
-) -> ExtractorPreview {
+) -> Result<ExtractorPreview, String> {
     let states = single_extractor_state(extractor, config);
-    let parsed_url =
-        url::Url::parse(url).expect("preview_single_extractor_settings requires a valid URL");
+    let parsed_url = url::Url::parse(url).map_err(|error| error.to_string())?;
     let html_size = html.len();
     let out_dir = PathBuf::from("/tmp/html-extract-preview").join(Uuid::new_v4().to_string());
-    let _ = fs::create_dir_all(&out_dir);
+    fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
 
     let mut runner = Runner::new(out_dir.clone(), html.to_string());
     run_named_extractor(&mut runner, &states, &parsed_url, extractor, extractor);
 
     let stat = runner.into_stats().into_iter().next().unwrap_or_default();
-    let output =
-        std::fs::read_to_string(out_dir.join(format!("{extractor}.txt"))).unwrap_or_default();
-    let _ = fs::remove_dir_all(&out_dir);
+    let output = std::fs::read_to_string(out_dir.join(format!("{extractor}.txt")))
+        .map_err(|error| error.to_string())?;
+    fs::remove_dir_all(&out_dir).map_err(|error| error.to_string())?;
 
-    ExtractorPreview {
+    Ok(ExtractorPreview {
         name: format!("{extractor} current settings"),
         extractor_key: extractor.to_string(),
         output_size: stat.output_size,
-        reduction_percent: (stat.output_size as f64 / html_size as f64).mul_add(-100.0, 100.0),
+        reduction_percent: crate::metrics::reduction_percent(stat.output_size, html_size),
         time_micros: stat.time_micros,
         panicked: stat.panicked,
         output,
-    }
+    })
 }
 
 fn single_extractor_state(
@@ -577,18 +579,17 @@ pub fn run_extraction(
     html: &str,
     states: &ExtractorStates,
     score_store: &ScoreStore,
-) -> Score {
-    let score = Score::new(url.to_string(), html.to_string(), states);
-    let _ = score_store.save(&score);
-    score
+) -> Result<Score, String> {
+    let score = Score::new(url.to_string(), html.to_string(), states)?;
+    score_store.save(&score)?;
+    Ok(score)
 }
 
 fn chrono_lite_now() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    format!("{now}")
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs().to_string(),
+        Err(before_epoch) => format!("-{}", before_epoch.duration().as_secs()),
+    }
 }
 
 pub fn run_cli_extractor(
@@ -604,8 +605,7 @@ pub fn run_cli_extractor(
                 .states
                 .get("turndown")
                 .map_or_default(|s| s.config.turndown.clone()),
-            &["noscript"]
-                .into_iter()
+            &std::iter::once("noscript")
                 .chain(DEFAULT_SKIP_TAGS.iter().copied())
                 .collect::<Vec<_>>(),
         ),
@@ -658,6 +658,14 @@ pub fn run_cli_extractor(
     }
 }
 
+/// Installed with npm ci --prefix tools/extractors; can be overridden for packaged deployments.
+fn extractor_node_modules() -> PathBuf {
+    std::env::var_os("HTML_TO_TEXT_NODE_MODULES").map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/extractors/node_modules"),
+        PathBuf::from,
+    )
+}
+
 fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> String {
     let tmp = std::env::temp_dir().join(format!("turndown_{}.html", uuid::Uuid::new_v4()));
     let _ = std::fs::write(&tmp, html);
@@ -674,15 +682,14 @@ fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> Strin
         "preformattedCode": cfg.preformatted_code,
     });
     let remove_tags_json = serde_json::to_string(remove_tags).unwrap_or_else(|_| "[]".to_string());
-    let node_code = r"const fs = require('fs'); const td = require('/home/jan/git/turndown'); const options = JSON.parse(process.argv[2]); const removeTags = JSON.parse(process.argv[3]); const svc = new td(options); for (const tag of removeTags) svc.remove(tag); const html = fs.readFileSync(process.argv[1], 'utf8'); process.stdout.write(svc.turndown(html))";
+    let node_code = r"const fs = require('fs'); const td = require('turndown'); const options = JSON.parse(process.argv[2]); const removeTags = JSON.parse(process.argv[3]); const svc = new td(options); for (const tag of removeTags) svc.remove(tag); const html = fs.readFileSync(process.argv[1], 'utf8'); process.stdout.write(svc.turndown(html))";
     let out = std::process::Command::new("node")
-        .args([
-            "-e",
-            node_code,
-            tmp.to_str().unwrap(),
-            &options.to_string(),
-            &remove_tags_json,
-        ])
+        .env("NODE_PATH", extractor_node_modules())
+        .arg("-e")
+        .arg(node_code)
+        .arg(&tmp)
+        .arg(options.to_string())
+        .arg(remove_tags_json)
         .output();
 
     let _ = std::fs::remove_file(&tmp);
@@ -729,7 +736,10 @@ fn normalize_percollate_marker(value: &str, allowed: &[char]) -> Option<char> {
 
 fn build_percollate_args(input_path: &std::path::Path, cfg: &PercollateConfig) -> Vec<String> {
     let mut args = vec![
-        "/home/jan/git/percollate/cli.js".to_string(),
+        extractor_node_modules()
+            .join("percollate/cli.js")
+            .display()
+            .to_string(),
         "md".to_string(),
         "-o".to_string(),
         "-".to_string(),
@@ -800,11 +810,23 @@ fn run_percollate(html: &str, cfg: &PercollateConfig) -> String {
 fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> String {
     let tmp = std::env::temp_dir().join(format!("trafilatura_{}.html", uuid::Uuid::new_v4()));
     let _ = std::fs::write(&tmp, html);
-    let cfg_json = serde_json::to_string(cfg).unwrap();
+    let cfg_json = match serde_json::to_string(cfg) {
+        Ok(json) => json,
+        Err(error) => return format!("[ERROR] serializing configuration failed: {error}"),
+    };
     let script = r"import json, sys, trafilatura; cfg = json.loads(sys.argv[2]); html = open(sys.argv[1]).read(); result = trafilatura.extract(html, output_format='markdown', favor_precision=cfg['favor_precision'], favor_recall=cfg['favor_recall'], include_comments=cfg['include_comments'], include_tables=cfg['include_tables'], include_images=cfg['include_images'], include_formatting=cfg['include_formatting'], include_links=cfg['include_links'], deduplicate=cfg['deduplicate'], with_metadata=cfg['with_metadata']); print(result if result else '', end='')";
     let out = std::process::Command::new("uv")
-        .args(["run", "--", "python3", "-c", script])
-        .arg(tmp.to_str().unwrap())
+        .args([
+            "run",
+            "--no-project",
+            "--with",
+            "trafilatura==2.3.1",
+            "--",
+            "python3",
+            "-c",
+            script,
+        ])
+        .arg(&tmp)
         .arg(cfg_json)
         .output();
 
@@ -836,11 +858,23 @@ fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> String {
 fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> String {
     let tmp = std::env::temp_dir().join(format!("h2t_py_{}.html", uuid::Uuid::new_v4()));
     let _ = std::fs::write(&tmp, html);
-    let cfg_json = serde_json::to_string(cfg).unwrap();
+    let cfg_json = match serde_json::to_string(cfg) {
+        Ok(json) => json,
+        Err(error) => return format!("[ERROR] serializing configuration failed: {error}"),
+    };
     let script = r"from html2text import HTML2Text; import json, sys; cfg = json.loads(sys.argv[2]); h = HTML2Text(); h.ignore_links = cfg['ignore_links']; h.ignore_images = cfg['ignore_images']; h.ignore_emphasis = cfg['ignore_emphasis']; h.body_width = cfg['body_width']; h.unicode_snob = cfg['unicode_snob']; h.escape_snob = cfg['escape_snob']; h.inline_links = cfg['inline_links']; h.google_doc = cfg['google_doc']; h.dash_unordered_list = cfg['dash_unordered_list']; html = open(sys.argv[1]).read(); print(h.handle(html), end='')";
     let out = std::process::Command::new("uv")
-        .args(["run", "--", "python3", "-c", script])
-        .arg(tmp.to_str().unwrap())
+        .args([
+            "run",
+            "--no-project",
+            "--with",
+            "html2text==2025.4.15",
+            "--",
+            "python3",
+            "-c",
+            script,
+        ])
+        .arg(&tmp)
         .arg(cfg_json)
         .output();
 
@@ -976,14 +1010,15 @@ fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> String {
     let out = std::process::Command::new("uv")
         .args([
             "run",
+            "--no-project",
             "--with",
-            "markdownify",
+            "markdownify==1.2.3",
             "--",
             "python3",
             "-c",
             script,
         ])
-        .arg(tmp.to_str().unwrap())
+        .arg(&tmp)
         .arg(cfg_json)
         .output();
 
@@ -1118,22 +1153,7 @@ fn run_webclaw(html: &str, states: &ExtractorStates) -> String {
     }
 }
 
-fn run_e2m(html: &str, states: &ExtractorStates) -> String {
-    let cfg = states
-        .states
-        .get("e2m")
-        .map_or_default(|s| s.config.e2m.clone());
-    let engine = if cfg.engine.is_empty() {
-        "unstructured"
-    } else {
-        &cfg.engine
-    };
-    let work_dir = std::env::temp_dir().join(format!("e2m_{}", uuid::Uuid::new_v4()));
-    let _ = std::fs::create_dir_all(&work_dir);
-    let tmp = work_dir.join("input.html");
-    let _ = std::fs::write(&tmp, html);
-    let langs = serde_json::to_string(&cfg.langs).unwrap();
-    let script = r#"
+const E2M_SCRIPT: &str = r#"
 import json
 import sys
 from pathlib import Path
@@ -1185,15 +1205,42 @@ result = parser._prepare_unstructured_data_to_e2m_parsed_data(
 )
 print(result.text, end="")
 "#;
+
+fn run_e2m(html: &str, states: &ExtractorStates) -> String {
+    let cfg = states
+        .states
+        .get("e2m")
+        .map_or_default(|s| s.config.e2m.clone());
+    let engine = if cfg.engine.is_empty() {
+        "unstructured"
+    } else {
+        &cfg.engine
+    };
+    let work_dir = std::env::temp_dir().join(format!("e2m_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&work_dir);
+    let tmp = work_dir.join("input.html");
+    let _ = std::fs::write(&tmp, html);
+    let langs = match serde_json::to_string(&cfg.langs) {
+        Ok(json) => json,
+        Err(error) => return format!("[ERROR] serializing e2m language settings failed: {error}"),
+    };
+    let script = E2M_SCRIPT;
     let out = std::process::Command::new("uv")
         .args([
             "run",
+            "--no-project",
+            "--python",
+            "3.12",
+            "--with",
+            "wisup-e2m==0.1.61",
             "--",
             "python3",
             "-c",
             script,
-            work_dir.to_str().unwrap(),
-            tmp.to_str().unwrap(),
+        ])
+        .arg(&work_dir)
+        .arg(&tmp)
+        .args([
             engine,
             &langs,
             if cfg.skip_headers_and_footers {
@@ -1355,13 +1402,10 @@ impl ScoreStore {
             let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "json") {
-                match read_to_string(&path) {
-                    Ok(s) => {
-                        if let Ok(score) = serde_json::from_str::<Score>(&s) {
-                            scores.push(score);
-                        }
+                if let Ok(source) = read_to_string(&path) {
+                    if let Ok(score) = serde_json::from_str::<Score>(&source) {
+                        scores.push(score);
                     }
-                    Err(_) => continue,
                 }
             }
         }
@@ -1390,7 +1434,7 @@ mod tests {
     }
 
     #[test]
-    fn compare_settings_applies_html2text_config() {
+    fn compare_settings_applies_html2text_config() -> Result<(), Box<dyn std::error::Error>> {
         let (score_store, dir) = test_store();
         let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
         let baseline = ExtractorConfig {
@@ -1415,7 +1459,7 @@ mod tests {
             baseline,
             candidate,
             &score_store,
-        );
+        )?;
 
         assert_eq!(score.extractor_results[0].name, "html2text baseline");
         assert_eq!(score.extractor_results[0].extractor_key, "html2text");
@@ -1425,19 +1469,18 @@ mod tests {
         );
         assert_eq!(score.extractor_results[1].extractor_key, "html2text");
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert_ne!(baseline_output, candidate_output);
         assert!(baseline_output.matches('\n').count() > candidate_output.matches('\n').count());
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[test]
-    fn compare_settings_applies_htmd_heading_style() {
+    fn compare_settings_applies_htmd_heading_style() -> Result<(), Box<dyn std::error::Error>> {
         let (score_store, dir) = test_store();
         let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
@@ -1464,22 +1507,21 @@ mod tests {
             baseline,
             candidate,
             &score_store,
-        );
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(baseline_output.contains("# Title"));
         assert!(candidate_output.contains("Title\n====="));
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[test]
-    fn compare_settings_applies_turndown_heading_style() {
+    fn compare_settings_applies_turndown_heading_style() -> Result<(), Box<dyn std::error::Error>> {
         let (score_store, dir) = test_store();
         let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
@@ -1504,18 +1546,17 @@ mod tests {
             baseline,
             candidate,
             &score_store,
-        );
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(baseline_output.contains("# Title"));
         assert!(candidate_output.contains("Title\n====="));
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[test]
@@ -1532,7 +1573,8 @@ mod tests {
     }
 
     #[test]
-    fn compare_settings_applies_percollate_markdown_options() {
+    fn compare_settings_applies_percollate_markdown_options(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let (score_store, dir) = test_store();
         let html = "<html><body><pre><code>code</code></pre><hr><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
@@ -1559,12 +1601,10 @@ mod tests {
             baseline,
             candidate,
             &score_store,
-        );
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(baseline_output.contains("```"));
         assert!(candidate_output.contains("~~~"));
@@ -1573,10 +1613,12 @@ mod tests {
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[test]
-    fn compare_settings_applies_trafilatura_metadata_option() {
+    fn compare_settings_applies_trafilatura_metadata_option(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let (score_store, dir) = test_store();
         let html = "<html><head><title>Title</title></head><body><article><p>Body</p></article></body></html>";
         let baseline = ExtractorConfig {
@@ -1601,23 +1643,23 @@ mod tests {
             baseline,
             candidate,
             &score_store,
-        );
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(!baseline_output.contains("---\ntitle:"));
         assert!(candidate_output.contains("---\ntitle: Title"));
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[cfg(feature = "dom_smoothie")]
     #[test]
-    fn compare_settings_applies_dom_smoothie_candidate_selection_mode() {
+    fn compare_settings_applies_dom_smoothie_candidate_selection_mode(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let (score_store, dir) = test_store();
         let html = "<html><body><main><div><div><div><div><p>Alice was beginning to get very tired of sitting by her sister on the bank.</p></div></div></div><div><div><div><p>So she was considering in her own mind whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies.</p></div></div></div></main></body></html>";
         let baseline = ExtractorConfig {
@@ -1642,12 +1684,10 @@ mod tests {
             baseline,
             candidate,
             &score_store,
-        );
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(!baseline_output.contains("Alice was beginning"));
         assert!(baseline_output.contains("So she was considering"));
@@ -1656,11 +1696,13 @@ mod tests {
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[cfg(feature = "dom_smoothie")]
     #[test]
-    fn preview_dom_smoothie_disable_json_ld_does_not_change_text_output() {
+    fn preview_dom_smoothie_disable_json_ld_does_not_change_text_output(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><head><script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@type\":\"Article\",\"url\":\"https://example.com/from-json-ld\",\"headline\":\"JSON-LD headline\"}</script></head><body><article><p>Visible article body.</p></article></body></html>";
         let baseline = preview_single_extractor_settings(
             "https://example.com",
@@ -1673,7 +1715,7 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
         let candidate = preview_single_extractor_settings(
             "https://example.com",
             html,
@@ -1685,15 +1727,17 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
 
         assert_eq!(baseline.output, candidate.output);
         assert!(baseline.output.contains("Visible article body"));
+        Ok(())
     }
 
     #[cfg(feature = "dom_smoothie")]
     #[test]
-    fn preview_dom_smoothie_class_preservation_does_not_change_text_output() {
+    fn preview_dom_smoothie_class_preservation_does_not_change_text_output(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><body><article><div class=\"keep-me drop-me\"><p>Visible article body.</p></div></article></body></html>";
         let baseline = preview_single_extractor_settings(
             "https://example.com",
@@ -1707,7 +1751,7 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
         let candidate = preview_single_extractor_settings(
             "https://example.com",
             html,
@@ -1720,10 +1764,11 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
 
         assert_eq!(baseline.output, candidate.output);
         assert!(baseline.output.contains("Visible article body"));
+        Ok(())
     }
 
     #[test]
@@ -1750,7 +1795,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_single_extractor_returns_current_output() {
+    fn preview_single_extractor_returns_current_output() -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
         let preview = preview_single_extractor_settings(
             "https://example.com",
@@ -1763,11 +1808,12 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
 
         assert_eq!(preview.extractor_key, "html2text");
         assert!(preview.output.contains("alpha beta"));
         assert!(preview.output.matches('\n').count() > 1);
+        Ok(())
     }
 
     #[test]
@@ -1797,19 +1843,23 @@ mod tests {
     }
 
     #[test]
-    fn build_markdownify_config_json_rejects_conflicting_tag_filters() {
-        let error = build_markdownify_config_json(&MarkdownifyConfig {
+    fn build_markdownify_config_json_rejects_conflicting_tag_filters(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Err(error) = build_markdownify_config_json(&MarkdownifyConfig {
             strip: vec!["a".to_string()],
             convert: vec!["p".to_string()],
             ..Default::default()
-        })
-        .unwrap_err();
+        }) else {
+            return Err("conflicting tag filters unexpectedly accepted".into());
+        };
 
         assert!(error.contains("mutually exclusive"));
+        Ok(())
     }
 
     #[test]
-    fn build_markdownify_config_json_normalizes_optional_fields() {
+    fn build_markdownify_config_json_normalizes_optional_fields(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let payload = build_markdownify_config_json(&MarkdownifyConfig {
             strip: vec![" a ".to_string(), String::new()],
             heading_style: "SETEXT".to_string(),
@@ -1821,9 +1871,8 @@ mod tests {
             strip_document: String::new(),
             strip_pre: "STRIP_ONE".to_string(),
             ..Default::default()
-        })
-        .unwrap();
-        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        })?;
+        let payload: serde_json::Value = serde_json::from_str(&payload)?;
 
         assert_eq!(payload["strip"], serde_json::json!(["a"]));
         assert_eq!(payload["heading_style"], serde_json::json!("underlined"));
@@ -1834,11 +1883,12 @@ mod tests {
         assert_eq!(payload["strip_document"], serde_json::Value::Null);
         assert_eq!(payload["strip_pre"], serde_json::json!("strip_one"));
         assert_eq!(payload["bs4_options"], serde_json::json!("lxml"));
+        Ok(())
     }
 
     #[test]
-    fn build_lightpanda_args_respects_wait_config() {
-        let url = url::Url::parse("https://example.com/article").unwrap();
+    fn build_lightpanda_args_respects_wait_config() -> Result<(), Box<dyn std::error::Error>> {
+        let url = url::Url::parse("https://example.com/article")?;
         let args = build_lightpanda_args(
             &url,
             &LightpandaConfig {
@@ -1854,12 +1904,17 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|window| window == ["--wait-ms", "2500"]));
-        assert_eq!(args.last().unwrap(), "https://example.com/article");
+        assert_eq!(
+            args.last().ok_or("missing final URL argument")?,
+            "https://example.com/article"
+        );
+        Ok(())
     }
 
     #[test]
-    fn build_html_to_markdown_go_args_respects_domain_and_plugins() {
-        let url = url::Url::parse("https://example.com/path").unwrap();
+    fn build_html_to_markdown_go_args_respects_domain_and_plugins(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let url = url::Url::parse("https://example.com/path")?;
         let args = build_html_to_markdown_go_args(
             &url,
             &HtmlToMarkdownGoConfig {
@@ -1880,5 +1935,6 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "--plugin-table"));
         assert!(args.iter().any(|arg| arg == "--plugin-strikethrough"));
         assert!(!args.iter().any(|arg| arg == "--plugin-commonmark"));
+        Ok(())
     }
 }

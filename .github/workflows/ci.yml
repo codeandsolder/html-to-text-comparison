@@ -21,4 +21,17 @@ jobs:
       rust-toolchain: "1.99.1"
       timeout-minutes: 45
       command: |
-        cargo test --locked --all-targets --all-features
+        PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts --no-audit --no-fund
+        uv run --no-project --with trafilatura==2.3.1 -- python3 -c 'import trafilatura'
+        cargo test --locked --all-targets --all-features -- --skip scores::tests::e2m_handles_images_without_image_paths
+
+  e2m-integration:
+    name: E2M heavyweight integration (release tier)
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@e7e29ed9109c2450c2a9f1f0310de9bd0000de3d # main
+    with:
+      validation-tier: "release"
+      rust-toolchain: "1.99.1"
+      timeout-minutes: 45
+      command: |
+        uv run --no-project --python 3.12 --with wisup-e2m==0.1.61 -- python3 -c 'from wisup_e2m import HtmlParser'
+        cargo test --locked --all-features e2m_handles_images_without_image_paths -- --nocapture

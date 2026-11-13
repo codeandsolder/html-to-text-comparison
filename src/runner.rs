@@ -64,20 +64,19 @@ impl Runner {
             Ok(result) => match result {
                 Ok((output, time_micros)) => {
                     eprintln!(
-                        "[runner] finished extractor={name} time_us={} output_bytes={}",
-                        time_micros,
+                        "[runner] finished extractor={name} time_us={time_micros} output_bytes={}",
                         output.len()
                     );
                     (output, time_micros, false, String::new())
                 }
                 Err(e) => {
-                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = e.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "Unknown panic".to_string()
-                    };
+                    let msg = e.downcast_ref::<&str>().map_or_else(
+                        || {
+                            e.downcast_ref::<String>()
+                                .map_or_else(|| "Unknown panic".to_string(), Clone::clone)
+                        },
+                        ToString::to_string,
+                    );
                     eprintln!("[runner] panic extractor={name} error={msg}");
                     (String::new(), 0, true, msg)
                 }
@@ -151,7 +150,7 @@ impl Runner {
                 &format!("{}", stat.output_size),
                 &format!(
                     "{:.2}%",
-                    (stat.output_size as f64 / self.html.len() as f64).mul_add(-100.0, 100.0)
+                    crate::metrics::reduction_percent(stat.output_size, self.html.len())
                 ),
                 if stat.panicked { "YES" } else { "no" },
                 if stat.error.is_empty() {
@@ -175,9 +174,9 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn runner_times_out_stuck_extractor() {
+    fn runner_times_out_stuck_extractor() -> Result<(), Box<dyn std::error::Error>> {
         let out_dir = std::env::temp_dir().join(format!("runner_timeout_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::create_dir_all(&out_dir)?;
         let mut runner = Runner::with_timeout(
             out_dir.clone(),
             "hello".to_string(),
@@ -192,8 +191,9 @@ mod tests {
         let stats = runner.into_stats();
         assert_eq!(stats.len(), 1);
         assert!(stats[0].error.contains("timed out"));
-        let output = std::fs::read_to_string(out_dir.join("stuck.txt")).unwrap();
+        let output = std::fs::read_to_string(out_dir.join("stuck.txt"))?;
         assert!(output.contains("timed out"));
         let _ = std::fs::remove_dir_all(out_dir);
+        Ok(())
     }
 }

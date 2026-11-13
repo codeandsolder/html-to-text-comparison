@@ -1,5 +1,6 @@
 mod boilerplate;
 mod extractor_config;
+mod metrics;
 mod runner;
 mod scores;
 mod web;
@@ -10,6 +11,10 @@ use std::path::PathBuf;
 use std::process::exit;
 
 #[tokio::main]
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI extractor registration enumerates each optional crate and its conversion boundary; decomposition is tracked separately from strict error-handling migration"
+)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -270,7 +275,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "reader-lm-api")]
         {
             let jina_api_key = std::env::var("JINA_API_KEY")?;
-            let url = url;
             runner.run("reader-lm-api", move |_html| {
                 match ureq::get(&format!("https://r.jina.ai/{url}"))
                     .set("authorization", &format!("Bearer {jina_api_key}"))
