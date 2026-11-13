@@ -21,6 +21,10 @@ jobs:
       rust-toolchain: "1.99.1"
       timeout-minutes: 45
       command: |
+        # Bootstrap the pinned uv wheel into runner-local ephemeral tooling.
+        python3 -m venv "$RUNNER_TEMP/uv-bootstrap"
+        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.7"
+        export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
         PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts --no-audit --no-fund
         uv run --no-project --with trafilatura==2.3.1 -- python3 -c 'import trafilatura'
         cargo test --locked --all-targets --all-features -- --skip scores::tests::e2m_handles_images_without_image_paths
@@ -33,5 +37,9 @@ jobs:
       rust-toolchain: "1.99.1"
       timeout-minutes: 45
       command: |
+        # Bootstrap the pinned uv wheel into runner-local ephemeral tooling.
+        python3 -m venv "$RUNNER_TEMP/uv-bootstrap"
+        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.7"
+        export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
         uv run --no-project --python 3.12 --with wisup-e2m==0.1.61 -- python3 -c 'from wisup_e2m import HtmlParser'
         cargo test --locked --all-features e2m_handles_images_without_image_paths -- --nocapture
