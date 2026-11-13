@@ -1019,7 +1019,8 @@
                 output_size: 0,
                 reduction_percent: 0,
                 time_micros: 0,
-                panicked: false
+                status: 'success',
+                error: ''
             };
             comparison.livePreviewPending = true;
             await ensureOutputLoaded(comparison.left);
@@ -1265,7 +1266,7 @@
             activeScore = await res.json();
             activeOutputs = {};
             boilerplateState = { ...boilerplateState, loading: false, result: null, error: null, scoreId: activeScore.id };
-            const successful = activeScore.extractor_results.filter(result => !result.panicked);
+            const successful = activeScore.extractor_results.filter(result => result.status === 'success');
             const pinned = getHistoricalPinnedExtractor(activeScore);
             const left = pinned && successful.some(result => result.name === pinned)
                 ? pinned

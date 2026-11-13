@@ -4,12 +4,31 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use std::{fs::write, path::PathBuf};
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractionStatus {
+    #[default]
+    Success,
+    NoContent,
+    Failed,
+    TimedOut,
+    Panicked,
+}
+
+impl ExtractionStatus {
+    pub const fn is_success(self) -> bool {
+        matches!(self, Self::Success)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Stats {
     pub name: String,
     pub time_micros: u64,
     pub output_size: usize,
-    pub panicked: bool,
+    pub status: ExtractionStatus,
     pub error: String,
 }
 
@@ -60,14 +79,27 @@ impl Runner {
             let _ = tx.send(result);
         });
 
-        let (output, time_micros, panicked, error) = match rx.recv_timeout(timeout) {
+        let (output, time_micros, status, error) = match rx.recv_timeout(timeout) {
             Ok(result) => match result {
                 Ok((output, time_micros)) => {
                     eprintln!(
                         "[runner] finished extractor={name} time_us={time_micros} output_bytes={}",
                         output.len()
                     );
-                    (output, time_micros, false, String::new())
+                    let (status, error) = output.strip_prefix("[ERROR]").map_or_else(
+                        || {
+                            if output.is_empty() {
+                                (
+                                    ExtractionStatus::NoContent,
+                                    "extractor returned empty content".to_string(),
+                                )
+                            } else {
+                                (ExtractionStatus::Success, String::new())
+                            }
+                        },
+                        |message| (ExtractionStatus::Failed, message.trim().to_string()),
+                    );
+                    (output, time_micros, status, error)
                 }
                 Err(e) => {
                     let msg = e.downcast_ref::<&str>().map_or_else(
@@ -78,35 +110,36 @@ impl Runner {
                         ToString::to_string,
                     );
                     eprintln!("[runner] panic extractor={name} error={msg}");
-                    (String::new(), 0, true, msg)
+                    (String::new(), 0, ExtractionStatus::Panicked, msg)
                 }
             },
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let msg = format!("timed out after {:.1}s", timeout.as_secs_f64());
                 eprintln!("[runner] timeout extractor={name} error={msg}");
-                (String::new(), 0, false, msg)
+                (String::new(), 0, ExtractionStatus::TimedOut, msg)
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let msg = "worker thread disconnected unexpectedly".to_string();
                 eprintln!("[runner] disconnected extractor={name} error={msg}");
-                (String::new(), 0, true, msg)
+                (String::new(), 0, ExtractionStatus::Panicked, msg)
             }
         };
 
-        let final_output = if !error.is_empty() {
-            format!("[ERROR] {error}\n")
-        } else if output.is_empty() {
-            "[ERROR] empty output — tool may not be installed, crashed, or returned no content]\n"
-                .to_string()
-        } else {
+        let final_output = if status.is_success() {
             output
+        } else {
+            format!("[ERROR] {error}\n")
         };
 
         self.stats.push(Stats {
             name: name.clone(),
             time_micros,
-            output_size: final_output.len(),
-            panicked,
+            output_size: if status.is_success() {
+                final_output.len()
+            } else {
+                0
+            },
+            status,
             error,
         });
 
@@ -148,11 +181,19 @@ impl Runner {
                 stat.name.as_str(),
                 &format!("{}", stat.time_micros),
                 &format!("{}", stat.output_size),
-                &format!(
-                    "{:.2}%",
-                    crate::metrics::reduction_percent(stat.output_size, self.html.len())
-                ),
-                if stat.panicked { "YES" } else { "no" },
+                &if stat.status.is_success() {
+                    format!(
+                        "{:.2}%",
+                        crate::metrics::reduction_percent(stat.output_size, self.html.len())
+                    )
+                } else {
+                    "—".to_string()
+                },
+                if stat.status == ExtractionStatus::Panicked {
+                    "YES"
+                } else {
+                    "no"
+                },
                 if stat.error.is_empty() {
                     "-"
                 } else {
@@ -174,6 +215,36 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn extractor_diagnostics_are_not_counted_as_content() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use super::ExtractionStatus;
+
+        let out_dir =
+            std::env::temp_dir().join(format!("runner_outcomes_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&out_dir)?;
+        let mut runner = Runner::new(out_dir.clone(), "<p>Hello</p>".to_string());
+
+        runner.run("success", |_| "Converted".to_string());
+        runner.run("failed", |_| "[ERROR] tool missing".to_string());
+        runner.run("empty", |_| String::new());
+
+        let stats = runner.into_stats();
+        assert_eq!(stats[0].status, ExtractionStatus::Success);
+        assert_eq!(stats[0].output_size, "Converted".len());
+        assert_eq!(stats[1].status, ExtractionStatus::Failed);
+        assert_eq!(stats[1].output_size, 0);
+        assert_eq!(stats[1].error, "tool missing");
+        assert_eq!(stats[2].status, ExtractionStatus::NoContent);
+        assert_eq!(stats[2].output_size, 0);
+        assert_eq!(
+            std::fs::read_to_string(out_dir.join("failed.txt"))?,
+            "[ERROR] tool missing\n"
+        );
+        std::fs::remove_dir_all(out_dir)?;
+        Ok(())
+    }
+
+    #[test]
     fn runner_times_out_stuck_extractor() -> Result<(), Box<dyn std::error::Error>> {
         let out_dir = std::env::temp_dir().join(format!("runner_timeout_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&out_dir)?;
@@ -191,6 +262,8 @@ mod tests {
         let stats = runner.into_stats();
         assert_eq!(stats.len(), 1);
         assert!(stats[0].error.contains("timed out"));
+        assert_eq!(stats[0].status, super::ExtractionStatus::TimedOut);
+        assert_eq!(stats[0].output_size, 0);
         let output = std::fs::read_to_string(out_dir.join("stuck.txt"))?;
         assert!(output.contains("timed out"));
         let _ = std::fs::remove_dir_all(out_dir);

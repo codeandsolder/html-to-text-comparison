@@ -8,7 +8,7 @@ use crate::extractor_config::{
     ExtractorStates, Html2TextPythonConfig, HtmlToMarkdownGoConfig, LightpandaConfig,
     MarkdownifyConfig, PercollateConfig, TrafilaturaConfig, TurndownConfig, DEFAULT_SKIP_TAGS,
 };
-use crate::runner::Runner;
+use crate::runner::{ExtractionStatus, Runner};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
@@ -33,7 +33,8 @@ pub struct ExtractorResult {
     pub output_size: usize,
     pub reduction_percent: f64,
     pub time_micros: u64,
-    pub panicked: bool,
+    pub status: ExtractionStatus,
+    pub error: String,
     pub output_file: String,
 }
 
@@ -45,7 +46,8 @@ pub struct ExtractorPreview {
     pub output_size: usize,
     pub reduction_percent: f64,
     pub time_micros: u64,
-    pub panicked: bool,
+    pub status: ExtractionStatus,
+    pub error: String,
 }
 
 impl Score {
@@ -80,9 +82,14 @@ impl Score {
                 name: stat.name.clone(),
                 extractor_key: stat.name.clone(),
                 output_size: stat.output_size,
-                reduction_percent: crate::metrics::reduction_percent(stat.output_size, html_size),
+                reduction_percent: if stat.status.is_success() {
+                    crate::metrics::reduction_percent(stat.output_size, html_size)
+                } else {
+                    0.0
+                },
                 time_micros: stat.time_micros,
-                panicked: stat.panicked,
+                status: stat.status,
+                error: stat.error.clone(),
                 output_file: out_dir
                     .join(format!("{}.txt", stat.name))
                     .display()
@@ -500,9 +507,14 @@ pub fn compare_single_extractor_settings(
             name: stat.name.clone(),
             extractor_key: extractor.to_string(),
             output_size: stat.output_size,
-            reduction_percent: crate::metrics::reduction_percent(stat.output_size, html_size),
+            reduction_percent: if stat.status.is_success() {
+                crate::metrics::reduction_percent(stat.output_size, html_size)
+            } else {
+                0.0
+            },
             time_micros: stat.time_micros,
-            panicked: stat.panicked,
+            status: stat.status,
+            error: stat.error,
             output_file: out_dir
                 .join(format!("{}.txt", stat.name))
                 .display()
@@ -553,9 +565,14 @@ pub fn preview_single_extractor_settings(
         name: format!("{extractor} current settings"),
         extractor_key: extractor.to_string(),
         output_size: stat.output_size,
-        reduction_percent: crate::metrics::reduction_percent(stat.output_size, html_size),
+        reduction_percent: if stat.status.is_success() {
+            crate::metrics::reduction_percent(stat.output_size, html_size)
+        } else {
+            0.0
+        },
         time_micros: stat.time_micros,
-        panicked: stat.panicked,
+        status: stat.status,
+        error: stat.error,
         output,
     })
 }
