@@ -558,7 +558,7 @@ async fn get_output(
 
     std::fs::read_to_string(&output_path).map_or_else(
         |_| (StatusCode::NOT_FOUND, "Output not found").into_response(),
-        |content| content.into_response(),
+        IntoResponse::into_response,
     )
 }
 
