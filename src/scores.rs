@@ -1788,8 +1788,8 @@ mod tests {
 
         let output = run_e2m(html, &states);
 
-        assert!(!output.starts_with("[ERROR]"));
-        assert!(output.contains("Title"));
+        assert!(!output.starts_with("[ERROR]"), "{output}");
+        assert!(output.contains("Title"), "{output}");
         assert!(output.contains("Before"));
         assert!(output.contains("After"));
     }
