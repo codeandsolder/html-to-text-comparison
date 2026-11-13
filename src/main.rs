@@ -1,19 +1,21 @@
 mod boilerplate;
 mod extractor_config;
+mod metrics;
 mod runner;
 mod scores;
 mod web;
 
 use extractor_config::ExtractorStates;
 
-#[allow(unused_imports)]
-use scores::run_cli_extractor;
-
 use std::path::PathBuf;
 use std::process::exit;
 
 #[tokio::main]
-async fn main() {
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI extractor registration enumerates each optional crate and its conversion boundary; decomposition is tracked separately from strict error-handling migration"
+)]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
@@ -22,39 +24,37 @@ async fn main() {
 
     if args.len() > 1 && args[1] == "--server" {
         let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(3000);
-        let data_dir: PathBuf = args
-            .get(3)
-            .map(|s| PathBuf::from(s))
-            .unwrap_or_else(|| "data".into());
+        let data_dir: PathBuf = args.get(3).map_or_else(|| "data".into(), PathBuf::from);
         if let Err(e) = web::start_server(port, data_dir).await {
-            eprintln!("Server error: {}", e);
+            eprintln!("Server error: {e}");
             exit(1);
         }
     } else if args.len() > 1 {
         let input = args[1..].join(" ");
-        let current_dir = std::env::current_dir().unwrap();
+        let current_dir = std::env::current_dir()?;
         let out_dir = current_dir.join("out");
 
-        let (html, url) =
-            if input.ends_with(".html") || input.ends_with(".htm") || input.ends_with(".xml") {
-                let html = std::fs::read_to_string(&input).expect("Failed to read file");
-                let url = url::Url::parse("file:///local/input.html").unwrap();
-                (html, url)
-            } else {
-                let url = url::Url::parse(&input).expect("Invalid URL");
-                let response = ureq::get(url.as_str()).call().expect("Failed to fetch URL");
-                let mut s = String::new();
-                response.into_reader().read_to_string(&mut s).unwrap();
-                (s, url)
-            };
+        let (html, url) = if std::path::Path::new(&input).is_file() {
+            let html = std::fs::read_to_string(&input)?;
+            let canonical = std::fs::canonicalize(&input)?;
+            let url = url::Url::from_file_path(canonical)
+                .map_err(|()| std::io::Error::other("Cannot represent input file as URL"))?;
+            (html, url)
+        } else {
+            let url = url::Url::parse(&input)?;
+            let response = ureq::get(url.as_str()).call()?;
+            let mut html = String::new();
+            response.into_reader().read_to_string(&mut html)?;
+            (html, url)
+        };
 
         if out_dir.exists() {
-            std::fs::remove_dir_all(&out_dir).unwrap();
+            std::fs::remove_dir_all(&out_dir)?;
         }
-        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::create_dir_all(&out_dir)?;
 
         let html_file = out_dir.join("html.html");
-        std::fs::write(&html_file, &html).unwrap();
+        std::fs::write(&html_file, &html)?;
         println!("HTML Size (bytes): {}", html.len());
 
         let mut runner = runner::Runner::new(out_dir, html);
@@ -64,9 +64,10 @@ async fn main() {
             let url = url.clone();
             runner.run("readability", move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
-                readability::extractor::extract(&mut html, &url)
-                    .unwrap()
-                    .text
+                readability::extractor::extract(&mut html, &url).map_or_else(
+                    |error| format!("[ERROR] readability failed: {error:?}"),
+                    |result| result.text,
+                )
             });
         }
 
@@ -75,9 +76,10 @@ async fn main() {
             let url = url.clone();
             runner.run("llm_readability", move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
-                llm_readability::extractor::extract(&mut html, &url)
-                    .unwrap()
-                    .text
+                llm_readability::extractor::extract(&mut html, &url).map_or_else(
+                    |error| format!("[ERROR] llm_readability failed: {error:?}"),
+                    |result| result.text,
+                )
             });
         }
 
@@ -116,7 +118,7 @@ async fn main() {
                     &ToMdConfig {
                         ignore_rendering: IGNORE_TAGS
                             .iter()
-                            .map(|tag| NodeType::from_tag_str(*tag))
+                            .map(|tag| NodeType::from_tag_str(tag))
                             .collect(),
                     },
                 )
@@ -126,7 +128,7 @@ async fn main() {
 
         #[cfg(feature = "nanohtml2text")]
         {
-            runner.run("nanohtml2text", |html| nanohtml2text::html2text(html));
+            runner.run("nanohtml2text", nanohtml2text::html2text);
         }
 
         #[cfg(feature = "readable-readability")]
@@ -134,21 +136,21 @@ async fn main() {
             let url = url.clone();
             runner.run("readable-readability", move |html| {
                 let mut parser = readable_readability::Readability::new();
-                parser.base_url(url.clone());
-                let (node, _metadata) = parser.parse(&html);
+                parser.base_url(url);
+                let (node, _metadata) = parser.parse(html);
                 node.text_contents()
             });
         }
 
         #[cfg(feature = "mdka")]
         {
-            runner.run("mdka", |html| mdka::html_to_markdown(html));
+            runner.run("mdka", mdka::html_to_markdown);
         }
 
         #[cfg(feature = "boilerpipe")]
         {
             runner.run("boilerpipe", |html| {
-                boilerpipe::parse_document(&html).content().to_string()
+                boilerpipe::parse_document(html).content().to_string()
             });
         }
 
@@ -164,19 +166,21 @@ async fn main() {
 
         #[cfg(feature = "dom_smoothie")]
         {
-            runner.run("dom_smoothie", |html| {
-                dom_smoothie::Readability::new(html, None, None)
-                    .unwrap()
-                    .parse()
-                    .unwrap()
-                    .text_content
-                    .to_string()
-            });
+            runner.run(
+                "dom_smoothie",
+                |html| match dom_smoothie::Readability::new(html, None, None) {
+                    Ok(mut parser) => match parser.parse() {
+                        Ok(result) => result.text_content.to_string(),
+                        Err(error) => format!("[ERROR] dom_smoothie parsing failed: {error:?}"),
+                    },
+                    Err(error) => format!("[ERROR] dom_smoothie setup failed: {error:?}"),
+                },
+            );
         }
 
         #[cfg(feature = "html2md")]
         {
-            runner.run("html2md", |html| html2md::parse_html(html));
+            runner.run("html2md", html2md::parse_html);
         }
 
         #[cfg(feature = "mdream")]
@@ -189,7 +193,7 @@ async fn main() {
 
         {
             use scores::run_cli_extractor;
-            let placeholder = url::Url::parse("https://placeholder.example.com").unwrap();
+            let placeholder = url::Url::parse("https://placeholder.example.com")?;
             let placeholder_turndown = placeholder.clone();
             runner.run("turndown", move |html| {
                 run_cli_extractor(
@@ -253,7 +257,7 @@ async fn main() {
                     &placeholder_webclaw,
                 )
             });
-            let placeholder_e2m = placeholder.clone();
+            let placeholder_e2m = placeholder;
             runner.run("e2m", move |html| {
                 run_cli_extractor("e2m", html, &ExtractorStates::default(), &placeholder_e2m)
             });
@@ -270,17 +274,21 @@ async fn main() {
 
         #[cfg(feature = "reader-lm-api")]
         {
-            let jina_api_key =
-                std::env::var("JINA_API_KEY").expect("Must set JINA_API_KEY environment variable");
-            let url = url.clone();
+            let jina_api_key = std::env::var("JINA_API_KEY")?;
             runner.run("reader-lm-api", move |_html| {
-                let response = ureq::get(&format!("https://r.jina.ai/{}", url))
-                    .set("authorization", &format!("Bearer {}", jina_api_key))
+                match ureq::get(&format!("https://r.jina.ai/{url}"))
+                    .set("authorization", &format!("Bearer {jina_api_key}"))
                     .call()
-                    .expect("Failed to fetch URL");
-                let mut s = String::new();
-                response.into_reader().read_to_string(&mut s).unwrap();
-                s
+                {
+                    Ok(response) => {
+                        let mut html = String::new();
+                        match response.into_reader().read_to_string(&mut html) {
+                            Ok(_) => html,
+                            Err(error) => format!("[ERROR] reader-lm-api read failed: {error}"),
+                        }
+                    }
+                    Err(error) => format!("[ERROR] reader-lm-api request failed: {error}"),
+                }
             });
         }
 
@@ -290,7 +298,8 @@ async fn main() {
         eprintln!("Usage:");
         eprintln!("  {} <url_or_file>     Run CLI extraction", args[0]);
         eprintln!("  {} --server [port]   Start web server", args[0]);
-        eprintln!("");
+        eprintln!();
         eprintln!("Web server mode: {} --server 3000", args[0]);
     }
+    Ok(())
 }

@@ -1,0 +1,10 @@
+{
+  "name": "html-to-text-comparison-extractors",
+  "private": true,
+  "description": "Reproducible Node.js extractors for the Rust comparison harness",
+  "version": "0.1.0",
+  "dependencies": {
+    "percollate": "4.3.0",
+    "turndown": "7.2.5"
+  }
+}

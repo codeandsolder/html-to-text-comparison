@@ -56,7 +56,7 @@ pub async fn start_server(port: u16, data_dir: PathBuf) -> Result<(), String> {
         .layer(cors)
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("0.0.0.0:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| e.to_string())?;
@@ -74,20 +74,19 @@ async fn list_scores(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn get_score(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match state.score_store.load(&id) {
-        Ok(score) => Json(score).into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Score not found").into_response(),
-    }
+    state.score_store.load(&id).map_or_else(
+        |_| (StatusCode::NOT_FOUND, "Score not found").into_response(),
+        |score| Json(score).into_response(),
+    )
 }
 
 async fn delete_score(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    let score = match state.score_store.load(&id) {
-        Ok(score) => score,
-        Err(_) => return (StatusCode::NOT_FOUND, "Score not found").into_response(),
+    let Ok(score) = state.score_store.load(&id) else {
+        return (StatusCode::NOT_FOUND, "Score not found").into_response();
     };
 
     match state.score_store.delete(&id) {
-        Ok(_) => {
+        Ok(()) => {
             if let Some(output_dir) = score
                 .extractor_results
                 .first()
@@ -112,7 +111,10 @@ async fn run_extraction(
 
     let states = state.extractor_states.read().await.clone();
     let score = crate::scores::run_extraction(&payload.url, &html, &states, &state.score_store);
-    Json(score).into_response()
+    match score {
+        Ok(score) => Json(score).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
 }
 
 async fn run_single_extraction(
@@ -139,7 +141,10 @@ async fn run_single_extraction(
     }
 
     let score = crate::scores::run_extraction(&payload.url, &html, &states, &state.score_store);
-    Json(score).into_response()
+    match score {
+        Ok(score) => Json(score).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
 }
 
 async fn compare_settings(
@@ -147,9 +152,8 @@ async fn compare_settings(
     Path(id): Path<String>,
     Json(payload): Json<SingleRunRequest>,
 ) -> impl IntoResponse {
-    let base_score = match state.score_store.load(&id) {
-        Ok(score) => score,
-        Err(_) => return (StatusCode::NOT_FOUND, "Score not found").into_response(),
+    let Ok(base_score) = state.score_store.load(&id) else {
+        return (StatusCode::NOT_FOUND, "Score not found").into_response();
     };
 
     let html = match load_score_source_html(&base_score).await {
@@ -161,8 +165,7 @@ async fn compare_settings(
         .settings_snapshot
         .states
         .get(&payload.extractor)
-        .map(|state| state.config.clone())
-        .unwrap_or_default();
+        .map_or_default(|state| state.config.clone());
 
     let candidate_config = if let Some(config) = &payload.config {
         let mut candidate_state = crate::extractor_config::ExtractorState {
@@ -183,7 +186,10 @@ async fn compare_settings(
         candidate_config,
         &state.score_store,
     );
-    Json(score).into_response()
+    match score {
+        Ok(score) => Json(score).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
 }
 
 async fn preview_settings(
@@ -191,9 +197,8 @@ async fn preview_settings(
     Path(id): Path<String>,
     Json(payload): Json<SingleRunRequest>,
 ) -> impl IntoResponse {
-    let base_score = match state.score_store.load(&id) {
-        Ok(score) => score,
-        Err(_) => return (StatusCode::NOT_FOUND, "Score not found").into_response(),
+    let Ok(base_score) = state.score_store.load(&id) else {
+        return (StatusCode::NOT_FOUND, "Score not found").into_response();
     };
 
     let html = match load_score_source_html(&base_score).await {
@@ -205,13 +210,12 @@ async fn preview_settings(
         .settings_snapshot
         .states
         .get(&payload.extractor)
-        .map(|state| state.config.clone())
-        .unwrap_or_default();
+        .map_or_default(|state| state.config.clone());
 
     let candidate_config = if let Some(config) = &payload.config {
         let mut candidate_state = crate::extractor_config::ExtractorState {
             enabled: true,
-            config: baseline_config.clone(),
+            config: baseline_config,
         };
         apply_extractor_config(&payload.extractor, config, &mut candidate_state);
         candidate_state.config
@@ -225,7 +229,10 @@ async fn preview_settings(
         &payload.extractor,
         candidate_config,
     );
-    Json(preview).into_response()
+    match preview {
+        Ok(preview) => Json(preview).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
 }
 
 async fn run_boilerplate_diff(
@@ -233,9 +240,8 @@ async fn run_boilerplate_diff(
     Path(id): Path<String>,
     Json(payload): Json<BoilerplateDiffRequest>,
 ) -> impl IntoResponse {
-    let base_score = match state.score_store.load(&id) {
-        Ok(score) => score,
-        Err(_) => return (StatusCode::NOT_FOUND, "Score not found").into_response(),
+    let Ok(base_score) = state.score_store.load(&id) else {
+        return (StatusCode::NOT_FOUND, "Score not found").into_response();
     };
 
     let html = match load_score_source_html(&base_score).await {
@@ -278,7 +284,7 @@ async fn toggle_extractor(
                 };
                 cfg.skip_tags = crate::extractor_config::DEFAULT_SKIP_TAGS
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect();
             }
             "mdka" => {
@@ -295,9 +301,7 @@ async fn toggle_extractor(
                 }
             }
             "dom_smoothie" => {
-                cfg.dom_smoothie = crate::extractor_config::DomSmoothieConfig {
-                    ..Default::default()
-                }
+                cfg.dom_smoothie = crate::extractor_config::DomSmoothieConfig::default();
             }
             "august" => cfg.augus_max_width = usize::MAX,
             "html2md-rs" => {
@@ -306,7 +310,7 @@ async fn toggle_extractor(
                 };
                 cfg.skip_tags = crate::extractor_config::DEFAULT_SKIP_TAGS
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect();
             }
             "turndown" => {
@@ -350,8 +354,12 @@ async fn toggle_extractor(
             },
         );
     }
-    let _ = states.save(&state.states_path);
-    (StatusCode::OK, "Toggled").into_response()
+    let snapshot = states.clone();
+    drop(states);
+    match snapshot.save(&state.states_path) {
+        Ok(()) => (StatusCode::OK, "Toggled").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
 }
 
 async fn configure_extractor(
@@ -363,14 +371,22 @@ async fn configure_extractor(
     if let Some(s) = states.states.get_mut(&name) {
         apply_extractor_config(&name, &config, s);
     }
-    let _ = states.save(&state.states_path);
-    (StatusCode::OK, "Configured").into_response()
+    let snapshot = states.clone();
+    drop(states);
+    match snapshot.save(&state.states_path) {
+        Ok(()) => (StatusCode::OK, "Configured").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
 }
 
 fn extractor_config_payload<'a>(config: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
     config.get(key).unwrap_or(config)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "This exhaustive mapping is the typed configuration bridge for all independently supported extractors; individual settings remain isolated in each match arm"
+)]
 fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut ExtractorState) {
     match name {
         "html2text" => {
@@ -384,7 +400,7 @@ fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut Ex
             if let Ok(cfg) = serde_json::from_value::<crate::extractor_config::HtmdConfig>(
                 extractor_config_payload(config, "htmd").clone(),
             ) {
-                state.config.skip_tags = cfg.skip_tags.clone();
+                state.config.skip_tags.clone_from(&cfg.skip_tags);
                 state.config.htmd = cfg;
             }
         }
@@ -392,7 +408,7 @@ fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut Ex
             if let Ok(cfg) = serde_json::from_value::<crate::extractor_config::Html2MdRsConfig>(
                 extractor_config_payload(config, "html2md_rs").clone(),
             ) {
-                state.config.skip_tags = cfg.ignore_tags.clone();
+                state.config.skip_tags.clone_from(&cfg.ignore_tags);
                 state.config.html2md_rs = cfg;
             }
         }
@@ -421,9 +437,10 @@ fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut Ex
             if let Some(w) = config
                 .get("max_width")
                 .or_else(|| config.get("augus_max_width"))
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|width| usize::try_from(width).ok())
             {
-                state.config.augus_max_width = w as usize;
+                state.config.augus_max_width = w;
             }
         }
         "turndown" => {
@@ -513,57 +530,61 @@ async fn update_grade(
         return (StatusCode::BAD_REQUEST, "Grade must be between 0 and 9").into_response();
     }
 
-    match state
+    state
         .score_store
         .update_grade(&id, &payload.extractor, payload.grade)
-    {
-        Ok(score) => Json(score).into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Score not found").into_response(),
-    }
+        .map_or_else(
+            |_| (StatusCode::NOT_FOUND, "Score not found").into_response(),
+            |score| Json(score).into_response(),
+        )
 }
 
 async fn get_output(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
 ) -> Response {
-    let score = match state.score_store.load(&id) {
-        Ok(s) => s,
-        Err(_) => return (StatusCode::NOT_FOUND, "Score not found").into_response(),
+    let Ok(score) = state.score_store.load(&id) else {
+        return (StatusCode::NOT_FOUND, "Score not found").into_response();
     };
 
-    let output_path = match score
+    let Some(result) = score
         .extractor_results
         .iter()
         .find(|result| result.name == name)
-    {
-        Some(result) => PathBuf::from(&result.output_file),
-        None => return (StatusCode::NOT_FOUND, "Output not found").into_response(),
+    else {
+        return (StatusCode::NOT_FOUND, "Output not found").into_response();
     };
+    let output_path = PathBuf::from(&result.output_file);
 
-    match std::fs::read_to_string(&output_path) {
-        Ok(content) => content.into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Output not found").into_response(),
-    }
+    std::fs::read_to_string(&output_path).map_or_else(
+        |_| (StatusCode::NOT_FOUND, "Output not found").into_response(),
+        IntoResponse::into_response,
+    )
 }
 
 async fn fetch_html(url: &str) -> Result<String, String> {
-    let response = ureq::get(url).call().map_err(|e| e.to_string())?;
-    let mut s = String::new();
-    response
-        .into_reader()
-        .read_to_string(&mut s)
-        .map_err(|e| e.to_string())?;
-    Ok(s)
+    let target = url.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let response = ureq::get(&target).call().map_err(|e| e.to_string())?;
+        let mut html = String::new();
+        response
+            .into_reader()
+            .read_to_string(&mut html)
+            .map_err(|e| e.to_string())?;
+        Ok(html)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 async fn load_score_source_html(score: &crate::scores::Score) -> Result<String, String> {
-    if !score.source_html_file.is_empty() {
+    if score.source_html_file.is_empty() {
+        fetch_html(&score.url).await
+    } else {
         match std::fs::read_to_string(&score.source_html_file) {
             Ok(content) => Ok(content),
             Err(_) => fetch_html(&score.url).await,
         }
-    } else {
-        fetch_html(&score.url).await
     }
 }
 

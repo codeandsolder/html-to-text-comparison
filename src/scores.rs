@@ -49,15 +49,15 @@ pub struct ExtractorPreview {
 }
 
 impl Score {
-    pub fn new(url: String, html: String, states: &ExtractorStates) -> Self {
+    pub fn new(url: String, html: String, states: &ExtractorStates) -> Result<Self, String> {
         let id = Uuid::new_v4().to_string();
         let timestamp = chrono_lite_now();
         let html_size = html.len();
         let out_dir = PathBuf::from("/tmp/html-extract").join(&id);
-        let _ = fs::create_dir_all(&out_dir);
+        fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
         let source_html_file = out_dir.join("source.html");
-        let _ = fs::write(&source_html_file, &html);
-        let parsed_url = url::Url::parse(&url).expect("run_extraction requires a valid URL");
+        fs::write(&source_html_file, &html).map_err(|error| error.to_string())?;
+        let parsed_url = url::Url::parse(&url).map_err(|error| error.to_string())?;
 
         let mut runner = Runner::new(out_dir, html);
         let states = states.clone();
@@ -72,15 +72,15 @@ impl Score {
             );
         }
 
-        let stats = runner.into_stats();
+        let outcomes = runner.into_stats();
         let out_dir = PathBuf::from("/tmp/html-extract").join(&id);
-        let extractor_results: Vec<ExtractorResult> = stats
+        let extractor_results: Vec<ExtractorResult> = outcomes
             .iter()
             .map(|stat| ExtractorResult {
                 name: stat.name.clone(),
                 extractor_key: stat.name.clone(),
                 output_size: stat.output_size,
-                reduction_percent: 100.0 - (stat.output_size as f64 / html_size as f64) * 100.0,
+                reduction_percent: crate::metrics::reduction_percent(stat.output_size, html_size),
                 time_micros: stat.time_micros,
                 panicked: stat.panicked,
                 output_file: out_dir
@@ -90,7 +90,7 @@ impl Score {
             })
             .collect();
 
-        Self {
+        Ok(Self {
             id,
             url,
             html_size,
@@ -99,7 +99,7 @@ impl Score {
             settings_snapshot: states,
             grades: BTreeMap::new(),
             extractor_results,
-        }
+        })
     }
 }
 
@@ -111,6 +111,10 @@ fn enabled_extractors(states: &ExtractorStates) -> Vec<&str> {
         .collect()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Exhaustive native extractor dispatch retains local per-extractor configurations; future structural splitting must preserve individual feature gates and output equivalence"
+)]
 fn run_named_extractor(
     runner: &mut Runner,
     states: &ExtractorStates,
@@ -124,9 +128,10 @@ fn run_named_extractor(
             let parsed_url = parsed_url.clone();
             runner.run(output_name, move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
-                readability::extractor::extract(&mut html, &parsed_url)
-                    .unwrap()
-                    .text
+                readability::extractor::extract(&mut html, &parsed_url).map_or_else(
+                    |error| format!("[ERROR] readability failed: {error:?}"),
+                    |result| result.text,
+                )
             });
         }
         #[cfg(feature = "llm_readability")]
@@ -134,9 +139,10 @@ fn run_named_extractor(
             let parsed_url = parsed_url.clone();
             runner.run(output_name, move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
-                llm_readability::extractor::extract(&mut html, &parsed_url)
-                    .unwrap()
-                    .text
+                llm_readability::extractor::extract(&mut html, &parsed_url).map_or_else(
+                    |error| format!("[ERROR] llm_readability failed: {error:?}"),
+                    |result| result.text,
+                )
             });
         }
         #[cfg(feature = "html2text")]
@@ -144,8 +150,7 @@ fn run_named_extractor(
             let cfg = states
                 .states
                 .get("html2text")
-                .map(|s| s.config.html2text.clone())
-                .unwrap_or_default();
+                .map_or_default(|s| s.config.html2text.clone());
             runner.run(output_name, move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
                 let width = cfg.max_wrap_width.max(1);
@@ -182,13 +187,11 @@ fn run_named_extractor(
             let cfg = states
                 .states
                 .get("htmd")
-                .map(|s| s.config.htmd.clone())
-                .unwrap_or_default();
+                .map_or_default(|s| s.config.htmd.clone());
             let legacy_skip_tags = states
                 .states
                 .get("htmd")
-                .map(|s| s.config.skip_tags.clone())
-                .unwrap_or_default();
+                .map_or_default(|s| s.config.skip_tags.clone());
             let skip_tags = if cfg.skip_tags.is_empty() {
                 legacy_skip_tags
             } else {
@@ -240,7 +243,8 @@ fn run_named_extractor(
                 };
                 let mut builder = htmd::HtmlToMarkdown::builder().options(options);
                 if !skip_tags.is_empty() {
-                    builder = builder.skip_tags(skip_tags.iter().map(|s| s.as_str()).collect());
+                    builder = builder
+                        .skip_tags(skip_tags.iter().map(std::string::String::as_str).collect());
                 }
                 builder.build().convert(html).unwrap_or_default()
             });
@@ -250,17 +254,15 @@ fn run_named_extractor(
             let cfg = states
                 .states
                 .get("html2md-rs")
-                .map(|s| s.config.html2md_rs.clone())
-                .unwrap_or_default();
+                .map_or_default(|s| s.config.html2md_rs.clone());
             let legacy_skip_tags = states
                 .states
                 .get("html2md-rs")
-                .map(|s| s.config.skip_tags.clone())
-                .unwrap_or_default();
+                .map_or_default(|s| s.config.skip_tags.clone());
             let tags = if cfg.ignore_tags.is_empty() {
                 legacy_skip_tags
             } else {
-                cfg.ignore_tags.clone()
+                cfg.ignore_tags
             };
             runner.run(output_name, move |html| {
                 use html2md_rs::structs::{NodeType, ToMdConfig};
@@ -279,17 +281,16 @@ fn run_named_extractor(
         }
         #[cfg(feature = "nanohtml2text")]
         "nanohtml2text" => {
-            runner.run(output_name, |html| nanohtml2text::html2text(html));
+            runner.run(output_name, nanohtml2text::html2text);
         }
         #[cfg(feature = "mdka")]
         "mdka" => {
             let cfg = states
                 .states
                 .get("mdka")
-                .map(|s| s.config.mdka.clone())
-                .unwrap_or_default();
+                .map_or_default(|s| s.config.mdka.clone());
             runner.run(output_name, move |html| {
-                mdka::html_to_markdown_with(html, &cfg.clone().into_conversion_options())
+                mdka::html_to_markdown_with(html, &cfg.into_conversion_options())
             });
         }
         #[cfg(feature = "readable-readability")]
@@ -297,15 +298,14 @@ fn run_named_extractor(
             let cfg = states
                 .states
                 .get("readable-readability")
-                .map(|s| s.config.readable_readability.clone())
-                .unwrap_or_default();
+                .map_or_default(|s| s.config.readable_readability.clone());
             runner.run(output_name, move |html| {
                 let mut parser = readable_readability::Readability::new();
                 parser.strip_unlikelys(cfg.strip_unlikelys);
                 parser.weight_classes(cfg.weight_classes);
                 parser.clean_conditionally(cfg.clean_conditionally);
                 parser.clean_attributes(cfg.clean_attributes);
-                let (node, _) = parser.parse(&html);
+                let (node, _) = parser.parse(html);
                 node.text_contents()
             });
         }
@@ -314,16 +314,16 @@ fn run_named_extractor(
             let cfg = states
                 .states
                 .get("dom_smoothie")
-                .map(|s| s.config.dom_smoothie.clone())
-                .unwrap_or_default();
+                .map_or_default(|s| s.config.dom_smoothie.clone());
             runner.run(output_name, move |html| {
-                let dom_cfg = cfg.clone();
-                dom_smoothie::Readability::new(html, None, dom_cfg.into_config())
-                    .unwrap()
-                    .parse()
-                    .unwrap()
-                    .text_content
-                    .to_string()
+                let dom_cfg = cfg;
+                match dom_smoothie::Readability::new(html, None, Some(dom_cfg.into_config())) {
+                    Ok(mut parser) => match parser.parse() {
+                        Ok(result) => result.text_content.to_string(),
+                        Err(error) => format!("[ERROR] dom_smoothie parse failed: {error:?}"),
+                    },
+                    Err(error) => format!("[ERROR] dom_smoothie setup failed: {error:?}"),
+                }
             });
         }
         #[cfg(feature = "boilerpipe")]
@@ -337,8 +337,7 @@ fn run_named_extractor(
             let cfg = states
                 .states
                 .get("august")
-                .map(|s| s.config.augus_max_width)
-                .unwrap_or(usize::MAX);
+                .map_or(usize::MAX, |s| s.config.augus_max_width);
             runner.run(output_name, move |html| august::convert(html, cfg));
         }
         #[cfg(feature = "fast_html2md")]
@@ -347,15 +346,14 @@ fn run_named_extractor(
         }
         #[cfg(feature = "html2md")]
         "html2md" => {
-            runner.run(output_name, |html| html2md::parse_html(html));
+            runner.run(output_name, html2md::parse_html);
         }
         #[cfg(feature = "mdream")]
         "mdream" => {
             let cfg = states
                 .states
                 .get("mdream")
-                .map(|s| s.config.mdream.clone())
-                .unwrap_or_default();
+                .map_or_default(|s| s.config.mdream.clone());
             runner.run(output_name, move |html| {
                 use mdream::{
                     html_to_markdown,
@@ -387,7 +385,6 @@ fn run_named_extractor(
                         self_link_headings: cfg.clean_self_link_headings,
                         empty_images: cfg.clean_empty_images,
                         empty_link_text: cfg.clean_empty_link_text,
-                        ..Default::default()
                     });
                 }
                 if cfg.minimal
@@ -422,7 +419,6 @@ fn run_named_extractor(
                                 None
                             },
                             process_children: cfg.filter_process_children.then_some(true),
-                            ..Default::default()
                         });
                     }
                     if cfg.isolate_main {
@@ -440,7 +436,7 @@ fn run_named_extractor(
                     }
                     if !cfg.extraction_selectors.is_empty() {
                         plugins.extraction = Some(ExtractionConfig {
-                            selectors: cfg.extraction_selectors.clone(),
+                            selectors: cfg.extraction_selectors,
                         });
                     }
                     opts.plugins = Some(plugins);
@@ -466,19 +462,18 @@ pub fn compare_single_extractor_settings(
     baseline_config: crate::extractor_config::ExtractorConfig,
     candidate_config: crate::extractor_config::ExtractorConfig,
     score_store: &ScoreStore,
-) -> Score {
-    let baseline_states = single_extractor_state(extractor, baseline_config.clone());
-    let candidate_states = single_extractor_state(extractor, candidate_config.clone());
+) -> Result<Score, String> {
+    let baseline_states = single_extractor_state(extractor, baseline_config);
+    let candidate_states = single_extractor_state(extractor, candidate_config);
 
     let id = Uuid::new_v4().to_string();
     let timestamp = chrono_lite_now();
     let html_size = html.len();
     let out_dir = PathBuf::from("/tmp/html-extract").join(&id);
-    let _ = fs::create_dir_all(&out_dir);
+    fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
     let source_html_file = out_dir.join("source.html");
-    let _ = fs::write(&source_html_file, html);
-    let parsed_url =
-        url::Url::parse(url).expect("compare_single_extractor_settings requires a valid URL");
+    fs::write(&source_html_file, html).map_err(|error| error.to_string())?;
+    let parsed_url = url::Url::parse(url).map_err(|error| error.to_string())?;
 
     let mut runner = Runner::new(out_dir.clone(), html.to_string());
     let baseline_name = format!("{extractor} baseline");
@@ -505,7 +500,7 @@ pub fn compare_single_extractor_settings(
             name: stat.name.clone(),
             extractor_key: extractor.to_string(),
             output_size: stat.output_size,
-            reduction_percent: 100.0 - (stat.output_size as f64 / html_size as f64) * 100.0,
+            reduction_percent: crate::metrics::reduction_percent(stat.output_size, html_size),
             time_micros: stat.time_micros,
             panicked: stat.panicked,
             output_file: out_dir
@@ -530,8 +525,8 @@ pub fn compare_single_extractor_settings(
         grades: BTreeMap::new(),
         extractor_results,
     };
-    let _ = score_store.save(&score);
-    score
+    score_store.save(&score)?;
+    Ok(score)
 }
 
 pub fn preview_single_extractor_settings(
@@ -539,31 +534,30 @@ pub fn preview_single_extractor_settings(
     html: &str,
     extractor: &str,
     config: crate::extractor_config::ExtractorConfig,
-) -> ExtractorPreview {
+) -> Result<ExtractorPreview, String> {
     let states = single_extractor_state(extractor, config);
-    let parsed_url =
-        url::Url::parse(url).expect("preview_single_extractor_settings requires a valid URL");
+    let parsed_url = url::Url::parse(url).map_err(|error| error.to_string())?;
     let html_size = html.len();
     let out_dir = PathBuf::from("/tmp/html-extract-preview").join(Uuid::new_v4().to_string());
-    let _ = fs::create_dir_all(&out_dir);
+    fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
 
     let mut runner = Runner::new(out_dir.clone(), html.to_string());
     run_named_extractor(&mut runner, &states, &parsed_url, extractor, extractor);
 
     let stat = runner.into_stats().into_iter().next().unwrap_or_default();
-    let output =
-        std::fs::read_to_string(out_dir.join(format!("{extractor}.txt"))).unwrap_or_default();
-    let _ = fs::remove_dir_all(&out_dir);
+    let output = std::fs::read_to_string(out_dir.join(format!("{extractor}.txt")))
+        .map_err(|error| error.to_string())?;
+    fs::remove_dir_all(&out_dir).map_err(|error| error.to_string())?;
 
-    ExtractorPreview {
+    Ok(ExtractorPreview {
         name: format!("{extractor} current settings"),
         extractor_key: extractor.to_string(),
         output_size: stat.output_size,
-        reduction_percent: 100.0 - (stat.output_size as f64 / html_size as f64) * 100.0,
+        reduction_percent: crate::metrics::reduction_percent(stat.output_size, html_size),
         time_micros: stat.time_micros,
         panicked: stat.panicked,
         output,
-    }
+    })
 }
 
 fn single_extractor_state(
@@ -585,21 +579,20 @@ pub fn run_extraction(
     html: &str,
     states: &ExtractorStates,
     score_store: &ScoreStore,
-) -> Score {
-    let score = Score::new(url.to_string(), html.to_string(), states);
-    let _ = score_store.save(&score);
-    score
+) -> Result<Score, String> {
+    let score = Score::new(url.to_string(), html.to_string(), states)?;
+    score_store.save(&score)?;
+    Ok(score)
 }
 
 fn chrono_lite_now() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    format!("{}", now)
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs().to_string(),
+        Err(before_epoch) => format!("-{}", before_epoch.duration().as_secs()),
+    }
 }
 
-pub(crate) fn run_cli_extractor(
+pub fn run_cli_extractor(
     extractor_key: &str,
     html: &str,
     states: &ExtractorStates,
@@ -611,10 +604,8 @@ pub(crate) fn run_cli_extractor(
             &states
                 .states
                 .get("turndown")
-                .map(|s| s.config.turndown.clone())
-                .unwrap_or_default(),
-            &["noscript"]
-                .into_iter()
+                .map_or_default(|s| s.config.turndown.clone()),
+            &std::iter::once("noscript")
                 .chain(DEFAULT_SKIP_TAGS.iter().copied())
                 .collect::<Vec<_>>(),
         ),
@@ -623,40 +614,35 @@ pub(crate) fn run_cli_extractor(
             &states
                 .states
                 .get("percollate")
-                .map(|s| s.config.percollate.clone())
-                .unwrap_or_default(),
+                .map_or_default(|s| s.config.percollate.clone()),
         ),
         "trafilatura" => run_trafilatura(
             html,
             &states
                 .states
                 .get("trafilatura")
-                .map(|s| s.config.trafilatura.clone())
-                .unwrap_or_default(),
+                .map_or_default(|s| s.config.trafilatura.clone()),
         ),
         "html2text-py" => run_html2text_py(
             html,
             &states
                 .states
                 .get("html2text-py")
-                .map(|s| s.config.html2text_py.clone())
-                .unwrap_or_default(),
+                .map_or_default(|s| s.config.html2text_py.clone()),
         ),
         "markdownify" => run_markdownify(
             html,
             &states
                 .states
                 .get("markdownify")
-                .map(|s| s.config.markdownify.clone())
-                .unwrap_or_default(),
+                .map_or_default(|s| s.config.markdownify.clone()),
         ),
         "lightpanda" => run_lightpanda(
             parsed_url,
             &states
                 .states
                 .get("lightpanda")
-                .map(|s| s.config.lightpanda.clone())
-                .unwrap_or_default(),
+                .map_or_default(|s| s.config.lightpanda.clone()),
         ),
         "webclaw" => run_webclaw(html, states),
         "e2m" => run_e2m(html, states),
@@ -666,11 +652,18 @@ pub(crate) fn run_cli_extractor(
             &states
                 .states
                 .get("html-to-markdown-go")
-                .map(|s| s.config.html_to_markdown_go.clone())
-                .unwrap_or_default(),
+                .map_or_default(|s| s.config.html_to_markdown_go.clone()),
         ),
         _ => String::new(),
     }
+}
+
+/// Installed with npm ci --prefix tools/extractors; can be overridden for packaged deployments.
+fn extractor_node_modules() -> PathBuf {
+    std::env::var_os("HTML_TO_TEXT_NODE_MODULES").map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/extractors/node_modules"),
+        PathBuf::from,
+    )
 }
 
 fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> String {
@@ -689,15 +682,14 @@ fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> Strin
         "preformattedCode": cfg.preformatted_code,
     });
     let remove_tags_json = serde_json::to_string(remove_tags).unwrap_or_else(|_| "[]".to_string());
-    let node_code = r#"const fs = require('fs'); const td = require('/home/jan/git/turndown'); const options = JSON.parse(process.argv[2]); const removeTags = JSON.parse(process.argv[3]); const svc = new td(options); for (const tag of removeTags) svc.remove(tag); const html = fs.readFileSync(process.argv[1], 'utf8'); process.stdout.write(svc.turndown(html))"#;
+    let node_code = r"const fs = require('fs'); const td = require('turndown'); const options = JSON.parse(process.argv[2]); const removeTags = JSON.parse(process.argv[3]); const svc = new td(options); for (const tag of removeTags) svc.remove(tag); const html = fs.readFileSync(process.argv[1], 'utf8'); process.stdout.write(svc.turndown(html))";
     let out = std::process::Command::new("node")
-        .args([
-            "-e",
-            node_code,
-            tmp.to_str().unwrap(),
-            &options.to_string(),
-            &remove_tags_json,
-        ])
+        .env("NODE_PATH", extractor_node_modules())
+        .arg("-e")
+        .arg(node_code)
+        .arg(&tmp)
+        .arg(options.to_string())
+        .arg(remove_tags_json)
         .output();
 
     let _ = std::fs::remove_file(&tmp);
@@ -721,7 +713,7 @@ fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> Strin
             }
             stdout.to_string()
         }
-        Err(e) => format!("[ERROR] node failed: {}\n", e),
+        Err(e) => format!("[ERROR] node failed: {e}\n"),
     }
 }
 
@@ -744,7 +736,10 @@ fn normalize_percollate_marker(value: &str, allowed: &[char]) -> Option<char> {
 
 fn build_percollate_args(input_path: &std::path::Path, cfg: &PercollateConfig) -> Vec<String> {
     let mut args = vec![
-        "/home/jan/git/percollate/cli.js".to_string(),
+        extractor_node_modules()
+            .join("percollate/cli.js")
+            .display()
+            .to_string(),
         "md".to_string(),
         "-o".to_string(),
         "-".to_string(),
@@ -808,18 +803,30 @@ fn run_percollate(html: &str, cfg: &PercollateConfig) -> String {
             }
             stdout.to_string()
         }
-        Err(e) => format!("[ERROR] percollate failed: {}\n", e),
+        Err(e) => format!("[ERROR] percollate failed: {e}\n"),
     }
 }
 
 fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> String {
     let tmp = std::env::temp_dir().join(format!("trafilatura_{}.html", uuid::Uuid::new_v4()));
     let _ = std::fs::write(&tmp, html);
-    let cfg_json = serde_json::to_string(cfg).unwrap();
-    let script = r#"import json, sys, trafilatura; cfg = json.loads(sys.argv[2]); html = open(sys.argv[1]).read(); result = trafilatura.extract(html, output_format='markdown', favor_precision=cfg['favor_precision'], favor_recall=cfg['favor_recall'], include_comments=cfg['include_comments'], include_tables=cfg['include_tables'], include_images=cfg['include_images'], include_formatting=cfg['include_formatting'], include_links=cfg['include_links'], deduplicate=cfg['deduplicate'], with_metadata=cfg['with_metadata']); print(result if result else '', end='')"#;
+    let cfg_json = match serde_json::to_string(cfg) {
+        Ok(json) => json,
+        Err(error) => return format!("[ERROR] serializing configuration failed: {error}"),
+    };
+    let script = r"import json, sys, trafilatura; cfg = json.loads(sys.argv[2]); html = open(sys.argv[1]).read(); result = trafilatura.extract(html, output_format='markdown', favor_precision=cfg['favor_precision'], favor_recall=cfg['favor_recall'], include_comments=cfg['include_comments'], include_tables=cfg['include_tables'], include_images=cfg['include_images'], include_formatting=cfg['include_formatting'], include_links=cfg['include_links'], deduplicate=cfg['deduplicate'], with_metadata=cfg['with_metadata']); print(result if result else '', end='')";
     let out = std::process::Command::new("uv")
-        .args(["run", "--", "python3", "-c", script])
-        .arg(tmp.to_str().unwrap())
+        .args([
+            "run",
+            "--no-project",
+            "--with",
+            "trafilatura==2.3.1",
+            "--",
+            "python3",
+            "-c",
+            script,
+        ])
+        .arg(&tmp)
         .arg(cfg_json)
         .output();
 
@@ -844,18 +851,30 @@ fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> String {
             }
             stdout.to_string()
         }
-        Err(e) => format!("[ERROR] uv failed: {}\n", e),
+        Err(e) => format!("[ERROR] uv failed: {e}\n"),
     }
 }
 
 fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> String {
     let tmp = std::env::temp_dir().join(format!("h2t_py_{}.html", uuid::Uuid::new_v4()));
     let _ = std::fs::write(&tmp, html);
-    let cfg_json = serde_json::to_string(cfg).unwrap();
-    let script = r#"from html2text import HTML2Text; import json, sys; cfg = json.loads(sys.argv[2]); h = HTML2Text(); h.ignore_links = cfg['ignore_links']; h.ignore_images = cfg['ignore_images']; h.ignore_emphasis = cfg['ignore_emphasis']; h.body_width = cfg['body_width']; h.unicode_snob = cfg['unicode_snob']; h.escape_snob = cfg['escape_snob']; h.inline_links = cfg['inline_links']; h.google_doc = cfg['google_doc']; h.dash_unordered_list = cfg['dash_unordered_list']; html = open(sys.argv[1]).read(); print(h.handle(html), end='')"#;
+    let cfg_json = match serde_json::to_string(cfg) {
+        Ok(json) => json,
+        Err(error) => return format!("[ERROR] serializing configuration failed: {error}"),
+    };
+    let script = r"from html2text import HTML2Text; import json, sys; cfg = json.loads(sys.argv[2]); h = HTML2Text(); h.ignore_links = cfg['ignore_links']; h.ignore_images = cfg['ignore_images']; h.ignore_emphasis = cfg['ignore_emphasis']; h.body_width = cfg['body_width']; h.unicode_snob = cfg['unicode_snob']; h.escape_snob = cfg['escape_snob']; h.inline_links = cfg['inline_links']; h.google_doc = cfg['google_doc']; h.dash_unordered_list = cfg['dash_unordered_list']; html = open(sys.argv[1]).read(); print(h.handle(html), end='')";
     let out = std::process::Command::new("uv")
-        .args(["run", "--", "python3", "-c", script])
-        .arg(tmp.to_str().unwrap())
+        .args([
+            "run",
+            "--no-project",
+            "--with",
+            "html2text==2025.4.15",
+            "--",
+            "python3",
+            "-c",
+            script,
+        ])
+        .arg(&tmp)
         .arg(cfg_json)
         .output();
 
@@ -880,7 +899,7 @@ fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> String {
             }
             stdout.to_string()
         }
-        Err(e) => format!("[ERROR] uv failed: {}\n", e),
+        Err(e) => format!("[ERROR] uv failed: {e}\n"),
     }
 }
 
@@ -985,20 +1004,21 @@ fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> String {
     let _ = std::fs::write(&tmp, html);
     let cfg_json = match build_markdownify_config_json(cfg) {
         Ok(cfg_json) => cfg_json,
-        Err(error) => return format!("[ERROR] markdownify config invalid: {}\n", error),
+        Err(error) => return format!("[ERROR] markdownify config invalid: {error}\n"),
     };
-    let script = r#"from markdownify import markdownify as md; import json, sys; cfg = json.loads(sys.argv[2]); kwargs = {'autolinks': cfg['autolinks'], 'default_title': cfg['default_title'], 'heading_style': cfg['heading_style'], 'bullets': cfg['bullets'], 'strong_em_symbol': cfg['strong_em_symbol'], 'sub_symbol': cfg['sub_symbol'], 'sup_symbol': cfg['sup_symbol'], 'newline_style': cfg['newline_style'], 'code_language': cfg['code_language'], 'escape_asterisks': cfg['escape_asterisks'], 'escape_underscores': cfg['escape_underscores'], 'escape_misc': cfg['escape_misc'], 'keep_inline_images_in': cfg['keep_inline_images_in'], 'table_infer_header': cfg['table_infer_header'], 'wrap': cfg['wrap'], 'wrap_width': cfg['wrap_width']}; html = open(sys.argv[1]).read(); strip = cfg['strip']; convert = cfg['convert']; strip_document = cfg['strip_document']; strip_pre = cfg['strip_pre']; bs4_options = cfg['bs4_options']; kwargs['strip'] = strip if strip else None; kwargs['convert'] = convert if convert else None; kwargs['strip_document'] = strip_document; kwargs['strip_pre'] = strip_pre; kwargs['bs4_options'] = bs4_options; kwargs = {key: value for key, value in kwargs.items() if value is not None}; print(md(html, **kwargs), end='')"#;
+    let script = r"from markdownify import markdownify as md; import json, sys; cfg = json.loads(sys.argv[2]); kwargs = {'autolinks': cfg['autolinks'], 'default_title': cfg['default_title'], 'heading_style': cfg['heading_style'], 'bullets': cfg['bullets'], 'strong_em_symbol': cfg['strong_em_symbol'], 'sub_symbol': cfg['sub_symbol'], 'sup_symbol': cfg['sup_symbol'], 'newline_style': cfg['newline_style'], 'code_language': cfg['code_language'], 'escape_asterisks': cfg['escape_asterisks'], 'escape_underscores': cfg['escape_underscores'], 'escape_misc': cfg['escape_misc'], 'keep_inline_images_in': cfg['keep_inline_images_in'], 'table_infer_header': cfg['table_infer_header'], 'wrap': cfg['wrap'], 'wrap_width': cfg['wrap_width']}; html = open(sys.argv[1]).read(); strip = cfg['strip']; convert = cfg['convert']; strip_document = cfg['strip_document']; strip_pre = cfg['strip_pre']; bs4_options = cfg['bs4_options']; kwargs['strip'] = strip if strip else None; kwargs['convert'] = convert if convert else None; kwargs['strip_document'] = strip_document; kwargs['strip_pre'] = strip_pre; kwargs['bs4_options'] = bs4_options; kwargs = {key: value for key, value in kwargs.items() if value is not None}; print(md(html, **kwargs), end='')";
     let out = std::process::Command::new("uv")
         .args([
             "run",
+            "--no-project",
             "--with",
-            "markdownify",
+            "markdownify==1.2.3",
             "--",
             "python3",
             "-c",
             script,
         ])
-        .arg(tmp.to_str().unwrap())
+        .arg(&tmp)
         .arg(cfg_json)
         .output();
 
@@ -1023,7 +1043,7 @@ fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> String {
             }
             stdout.to_string()
         }
-        Err(e) => format!("[ERROR] uv failed: {}\n", e),
+        Err(e) => format!("[ERROR] uv failed: {e}\n"),
     }
 }
 
@@ -1072,7 +1092,7 @@ fn run_lightpanda(parsed_url: &url::Url, cfg: &LightpandaConfig) -> String {
             }
             stdout.to_string()
         }
-        Err(e) => format!("[ERROR] docker exec lightpanda failed: {}\n", e),
+        Err(e) => format!("[ERROR] docker exec lightpanda failed: {e}\n"),
     }
 }
 
@@ -1080,8 +1100,7 @@ fn run_webclaw(html: &str, states: &ExtractorStates) -> String {
     let cfg = states
         .states
         .get("webclaw")
-        .map(|s| s.config.webclaw.clone())
-        .unwrap_or_default();
+        .map_or_default(|s| s.config.webclaw.clone());
     let tmp = std::env::temp_dir().join(format!("webclaw_{}.html", uuid::Uuid::new_v4()));
     let _ = std::fs::write(&tmp, html);
     let mut args = vec!["--file".to_string(), tmp.to_string_lossy().to_string()];
@@ -1100,7 +1119,7 @@ fn run_webclaw(html: &str, states: &ExtractorStates) -> String {
     args.push(if cfg.format.is_empty() {
         "markdown".to_string()
     } else {
-        cfg.format.clone()
+        cfg.format
     });
     let bin = std::path::Path::new("/home/jan/git/webclaw/webclaw_bin");
     let out = if bin.exists() {
@@ -1130,32 +1149,30 @@ fn run_webclaw(html: &str, states: &ExtractorStates) -> String {
             }
             stdout.to_string()
         }
-        Err(e) => format!("[ERROR] webclaw not found: {}\n", e),
+        Err(e) => format!("[ERROR] webclaw not found: {e}\n"),
     }
 }
 
-fn run_e2m(html: &str, states: &ExtractorStates) -> String {
-    let cfg = states
-        .states
-        .get("e2m")
-        .map(|s| s.config.e2m.clone())
-        .unwrap_or_default();
-    let engine = if cfg.engine.is_empty() {
-        "unstructured"
-    } else {
-        &cfg.engine
-    };
-    let work_dir = std::env::temp_dir().join(format!("e2m_{}", uuid::Uuid::new_v4()));
-    let _ = std::fs::create_dir_all(&work_dir);
-    let tmp = work_dir.join("input.html");
-    let _ = std::fs::write(&tmp, html);
-    let langs = serde_json::to_string(&cfg.langs).unwrap();
-    let script = r#"
+const E2M_SCRIPT: &str = r#"
 import json
 import sys
 from pathlib import Path
 
+import nltk
 from wisup_e2m import HtmlParser
+
+# wisup-e2m pins an unstructured release whose built-in NLTK bundle URL
+# is no longer available. Use NLTK's supported package index instead.
+for category, resource in (
+    ("tokenizers", "punkt_tab"),
+    ("taggers", "averaged_perceptron_tagger_eng"),
+):
+    try:
+        nltk.data.find(f"{category}/{resource}")
+    except LookupError:
+        if not nltk.download(resource, quiet=True, raise_on_error=True):
+            raise RuntimeError(f"Could not obtain NLTK resource {resource}")
+
 
 work_dir = Path(sys.argv[1]).resolve()
 input_path = Path(sys.argv[2]).resolve()
@@ -1202,15 +1219,42 @@ result = parser._prepare_unstructured_data_to_e2m_parsed_data(
 )
 print(result.text, end="")
 "#;
+
+fn run_e2m(html: &str, states: &ExtractorStates) -> String {
+    let cfg = states
+        .states
+        .get("e2m")
+        .map_or_default(|s| s.config.e2m.clone());
+    let engine = if cfg.engine.is_empty() {
+        "unstructured"
+    } else {
+        &cfg.engine
+    };
+    let work_dir = std::env::temp_dir().join(format!("e2m_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&work_dir);
+    let tmp = work_dir.join("input.html");
+    let _ = std::fs::write(&tmp, html);
+    let langs = match serde_json::to_string(&cfg.langs) {
+        Ok(json) => json,
+        Err(error) => return format!("[ERROR] serializing e2m language settings failed: {error}"),
+    };
+    let script = E2M_SCRIPT;
     let out = std::process::Command::new("uv")
         .args([
             "run",
+            "--no-project",
+            "--python",
+            "3.12",
+            "--with",
+            "wisup-e2m==0.1.61",
             "--",
             "python3",
             "-c",
             script,
-            work_dir.to_str().unwrap(),
-            tmp.to_str().unwrap(),
+        ])
+        .arg(&work_dir)
+        .arg(&tmp)
+        .args([
             engine,
             &langs,
             if cfg.skip_headers_and_footers {
@@ -1251,7 +1295,7 @@ print(result.text, end="")
             }
             stdout.to_string()
         }
-        Err(e) => format!("[ERROR] uv failed: {}\n", e),
+        Err(e) => format!("[ERROR] uv failed: {e}\n"),
     }
 }
 
@@ -1283,7 +1327,7 @@ fn build_html_to_markdown_go_args(
         .map(|plugin| plugin.trim())
         .filter(|plugin| !plugin.is_empty() && *plugin != "commonmark" && *plugin != "base")
     {
-        args.push(format!("--plugin-{}", plugin));
+        args.push(format!("--plugin-{plugin}"));
     }
     args
 }
@@ -1329,10 +1373,63 @@ fn run_html_to_markdown_go(
                     }
                     stdout.to_string()
                 }
-                Err(e) => format!("[ERROR] html-to-markdown-go wait failed: {}\n", e),
+                Err(e) => format!("[ERROR] html-to-markdown-go wait failed: {e}\n"),
             }
         }
-        Err(e) => format!("[ERROR] html2markdown spawn failed: {}\n", e),
+        Err(e) => format!("[ERROR] html2markdown spawn failed: {e}\n"),
+    }
+}
+
+#[derive(Clone)]
+pub struct ScoreStore {
+    dir: PathBuf,
+}
+
+impl ScoreStore {
+    pub fn new(dir: PathBuf) -> Self {
+        let _ = fs::create_dir_all(&dir);
+        Self { dir }
+    }
+
+    pub fn save(&self, score: &Score) -> Result<(), String> {
+        let path = self.dir.join(format!("{}.json", score.id));
+        let s = serde_json::to_string_pretty(score).map_err(|e| e.to_string())?;
+        fs::write(path, s).map_err(|e| e.to_string())
+    }
+
+    pub fn load(&self, id: &str) -> Result<Score, String> {
+        let path = self.dir.join(format!("{id}.json"));
+        let s = read_to_string(path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())
+    }
+
+    pub fn update_grade(&self, id: &str, extractor: &str, grade: u8) -> Result<Score, String> {
+        let mut score = self.load(id)?;
+        score.grades.insert(extractor.to_string(), grade);
+        self.save(&score)?;
+        Ok(score)
+    }
+
+    pub fn list(&self) -> Result<Vec<Score>, String> {
+        let mut scores = Vec::new();
+        for entry in fs::read_dir(&self.dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "json") {
+                if let Ok(source) = read_to_string(&path) {
+                    if let Ok(score) = serde_json::from_str::<Score>(&source) {
+                        scores.push(score);
+                    }
+                }
+            }
+        }
+        scores.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        Ok(scores)
+    }
+
+    pub fn delete(&self, id: &str) -> Result<(), String> {
+        let path = self.dir.join(format!("{id}.json"));
+        fs::remove_file(path).map_err(|e| e.to_string())
     }
 }
 
@@ -1351,8 +1448,8 @@ mod tests {
     }
 
     #[test]
-    fn compare_settings_applies_html2text_config() {
-        let (store, dir) = test_store();
+    fn compare_settings_applies_html2text_config() -> Result<(), Box<dyn std::error::Error>> {
+        let (score_store, dir) = test_store();
         let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
         let baseline = ExtractorConfig {
             html2text: Html2TextConfig {
@@ -1375,8 +1472,8 @@ mod tests {
             "html2text",
             baseline,
             candidate,
-            &store,
-        );
+            &score_store,
+        )?;
 
         assert_eq!(score.extractor_results[0].name, "html2text baseline");
         assert_eq!(score.extractor_results[0].extractor_key, "html2text");
@@ -1386,20 +1483,19 @@ mod tests {
         );
         assert_eq!(score.extractor_results[1].extractor_key, "html2text");
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert_ne!(baseline_output, candidate_output);
         assert!(baseline_output.matches('\n').count() > candidate_output.matches('\n').count());
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[test]
-    fn compare_settings_applies_htmd_heading_style() {
-        let (store, dir) = test_store();
+    fn compare_settings_applies_htmd_heading_style() -> Result<(), Box<dyn std::error::Error>> {
+        let (score_store, dir) = test_store();
         let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
             htmd: HtmdConfig {
@@ -1424,24 +1520,23 @@ mod tests {
             "htmd",
             baseline,
             candidate,
-            &store,
-        );
+            &score_store,
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(baseline_output.contains("# Title"));
         assert!(candidate_output.contains("Title\n====="));
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[test]
-    fn compare_settings_applies_turndown_heading_style() {
-        let (store, dir) = test_store();
+    fn compare_settings_applies_turndown_heading_style() -> Result<(), Box<dyn std::error::Error>> {
+        let (score_store, dir) = test_store();
         let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
             turndown: TurndownConfig {
@@ -1464,19 +1559,18 @@ mod tests {
             "turndown",
             baseline,
             candidate,
-            &store,
-        );
+            &score_store,
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(baseline_output.contains("# Title"));
         assert!(candidate_output.contains("Title\n====="));
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[test]
@@ -1493,8 +1587,9 @@ mod tests {
     }
 
     #[test]
-    fn compare_settings_applies_percollate_markdown_options() {
-        let (store, dir) = test_store();
+    fn compare_settings_applies_percollate_markdown_options(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (score_store, dir) = test_store();
         let html = "<html><body><pre><code>code</code></pre><hr><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
             percollate: PercollateConfig {
@@ -1519,13 +1614,11 @@ mod tests {
             "percollate",
             baseline,
             candidate,
-            &store,
-        );
+            &score_store,
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(baseline_output.contains("```"));
         assert!(candidate_output.contains("~~~"));
@@ -1534,11 +1627,13 @@ mod tests {
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[test]
-    fn compare_settings_applies_trafilatura_metadata_option() {
-        let (store, dir) = test_store();
+    fn compare_settings_applies_trafilatura_metadata_option(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (score_store, dir) = test_store();
         let html = "<html><head><title>Title</title></head><body><article><p>Body</p></article></body></html>";
         let baseline = ExtractorConfig {
             trafilatura: TrafilaturaConfig {
@@ -1561,25 +1656,25 @@ mod tests {
             "trafilatura",
             baseline,
             candidate,
-            &store,
-        );
+            &score_store,
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(!baseline_output.contains("---\ntitle:"));
         assert!(candidate_output.contains("---\ntitle: Title"));
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[cfg(feature = "dom_smoothie")]
     #[test]
-    fn compare_settings_applies_dom_smoothie_candidate_selection_mode() {
-        let (store, dir) = test_store();
+    fn compare_settings_applies_dom_smoothie_candidate_selection_mode(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (score_store, dir) = test_store();
         let html = "<html><body><main><div><div><div><div><p>Alice was beginning to get very tired of sitting by her sister on the bank.</p></div></div></div><div><div><div><p>So she was considering in her own mind whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies.</p></div></div></div></main></body></html>";
         let baseline = ExtractorConfig {
             dom_smoothie: crate::extractor_config::DomSmoothieConfig {
@@ -1602,13 +1697,11 @@ mod tests {
             "dom_smoothie",
             baseline,
             candidate,
-            &store,
-        );
+            &score_store,
+        )?;
 
-        let baseline_output =
-            std::fs::read_to_string(&score.extractor_results[0].output_file).unwrap();
-        let candidate_output =
-            std::fs::read_to_string(&score.extractor_results[1].output_file).unwrap();
+        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
+        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
 
         assert!(!baseline_output.contains("Alice was beginning"));
         assert!(baseline_output.contains("So she was considering"));
@@ -1617,11 +1710,13 @@ mod tests {
         assert_ne!(baseline_output, candidate_output);
 
         let _ = std::fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[cfg(feature = "dom_smoothie")]
     #[test]
-    fn preview_dom_smoothie_disable_json_ld_does_not_change_text_output() {
+    fn preview_dom_smoothie_disable_json_ld_does_not_change_text_output(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><head><script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@type\":\"Article\",\"url\":\"https://example.com/from-json-ld\",\"headline\":\"JSON-LD headline\"}</script></head><body><article><p>Visible article body.</p></article></body></html>";
         let baseline = preview_single_extractor_settings(
             "https://example.com",
@@ -1634,7 +1729,7 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
         let candidate = preview_single_extractor_settings(
             "https://example.com",
             html,
@@ -1646,15 +1741,17 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
 
         assert_eq!(baseline.output, candidate.output);
         assert!(baseline.output.contains("Visible article body"));
+        Ok(())
     }
 
     #[cfg(feature = "dom_smoothie")]
     #[test]
-    fn preview_dom_smoothie_class_preservation_does_not_change_text_output() {
+    fn preview_dom_smoothie_class_preservation_does_not_change_text_output(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><body><article><div class=\"keep-me drop-me\"><p>Visible article body.</p></div></article></body></html>";
         let baseline = preview_single_extractor_settings(
             "https://example.com",
@@ -1668,7 +1765,7 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
         let candidate = preview_single_extractor_settings(
             "https://example.com",
             html,
@@ -1681,10 +1778,11 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
 
         assert_eq!(baseline.output, candidate.output);
         assert!(baseline.output.contains("Visible article body"));
+        Ok(())
     }
 
     #[test]
@@ -1704,14 +1802,14 @@ mod tests {
 
         let output = run_e2m(html, &states);
 
-        assert!(!output.starts_with("[ERROR]"));
-        assert!(output.contains("Title"));
+        assert!(!output.starts_with("[ERROR]"), "{output}");
+        assert!(output.contains("Title"), "{output}");
         assert!(output.contains("Before"));
         assert!(output.contains("After"));
     }
 
     #[test]
-    fn preview_single_extractor_returns_current_output() {
+    fn preview_single_extractor_returns_current_output() -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
         let preview = preview_single_extractor_settings(
             "https://example.com",
@@ -1724,11 +1822,12 @@ mod tests {
                 },
                 ..Default::default()
             },
-        );
+        )?;
 
         assert_eq!(preview.extractor_key, "html2text");
         assert!(preview.output.contains("alpha beta"));
         assert!(preview.output.matches('\n').count() > 1);
+        Ok(())
     }
 
     #[test]
@@ -1758,19 +1857,23 @@ mod tests {
     }
 
     #[test]
-    fn build_markdownify_config_json_rejects_conflicting_tag_filters() {
-        let error = build_markdownify_config_json(&MarkdownifyConfig {
+    fn build_markdownify_config_json_rejects_conflicting_tag_filters(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Err(error) = build_markdownify_config_json(&MarkdownifyConfig {
             strip: vec!["a".to_string()],
             convert: vec!["p".to_string()],
             ..Default::default()
-        })
-        .unwrap_err();
+        }) else {
+            return Err("conflicting tag filters unexpectedly accepted".into());
+        };
 
         assert!(error.contains("mutually exclusive"));
+        Ok(())
     }
 
     #[test]
-    fn build_markdownify_config_json_normalizes_optional_fields() {
+    fn build_markdownify_config_json_normalizes_optional_fields(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let payload = build_markdownify_config_json(&MarkdownifyConfig {
             strip: vec![" a ".to_string(), String::new()],
             heading_style: "SETEXT".to_string(),
@@ -1782,9 +1885,8 @@ mod tests {
             strip_document: String::new(),
             strip_pre: "STRIP_ONE".to_string(),
             ..Default::default()
-        })
-        .unwrap();
-        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        })?;
+        let payload: serde_json::Value = serde_json::from_str(&payload)?;
 
         assert_eq!(payload["strip"], serde_json::json!(["a"]));
         assert_eq!(payload["heading_style"], serde_json::json!("underlined"));
@@ -1795,11 +1897,12 @@ mod tests {
         assert_eq!(payload["strip_document"], serde_json::Value::Null);
         assert_eq!(payload["strip_pre"], serde_json::json!("strip_one"));
         assert_eq!(payload["bs4_options"], serde_json::json!("lxml"));
+        Ok(())
     }
 
     #[test]
-    fn build_lightpanda_args_respects_wait_config() {
-        let url = url::Url::parse("https://example.com/article").unwrap();
+    fn build_lightpanda_args_respects_wait_config() -> Result<(), Box<dyn std::error::Error>> {
+        let url = url::Url::parse("https://example.com/article")?;
         let args = build_lightpanda_args(
             &url,
             &LightpandaConfig {
@@ -1815,12 +1918,17 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|window| window == ["--wait-ms", "2500"]));
-        assert_eq!(args.last().unwrap(), "https://example.com/article");
+        assert_eq!(
+            args.last().ok_or("missing final URL argument")?,
+            "https://example.com/article"
+        );
+        Ok(())
     }
 
     #[test]
-    fn build_html_to_markdown_go_args_respects_domain_and_plugins() {
-        let url = url::Url::parse("https://example.com/path").unwrap();
+    fn build_html_to_markdown_go_args_respects_domain_and_plugins(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let url = url::Url::parse("https://example.com/path")?;
         let args = build_html_to_markdown_go_args(
             &url,
             &HtmlToMarkdownGoConfig {
@@ -1841,61 +1949,6 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "--plugin-table"));
         assert!(args.iter().any(|arg| arg == "--plugin-strikethrough"));
         assert!(!args.iter().any(|arg| arg == "--plugin-commonmark"));
-    }
-}
-
-#[derive(Clone)]
-pub struct ScoreStore {
-    dir: PathBuf,
-}
-
-impl ScoreStore {
-    pub fn new(dir: PathBuf) -> Self {
-        let _ = fs::create_dir_all(&dir);
-        Self { dir }
-    }
-
-    pub fn save(&self, score: &Score) -> Result<(), String> {
-        let path = self.dir.join(format!("{}.json", score.id));
-        let s = serde_json::to_string_pretty(score).map_err(|e| e.to_string())?;
-        fs::write(path, s).map_err(|e| e.to_string())
-    }
-
-    pub fn load(&self, id: &str) -> Result<Score, String> {
-        let path = self.dir.join(format!("{}.json", id));
-        let s = read_to_string(path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&s).map_err(|e| e.to_string())
-    }
-
-    pub fn update_grade(&self, id: &str, extractor: &str, grade: u8) -> Result<Score, String> {
-        let mut score = self.load(id)?;
-        score.grades.insert(extractor.to_string(), grade);
-        self.save(&score)?;
-        Ok(score)
-    }
-
-    pub fn list(&self) -> Result<Vec<Score>, String> {
-        let mut scores = Vec::new();
-        for entry in fs::read_dir(&self.dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            if path.extension().map(|e| e == "json").unwrap_or(false) {
-                match read_to_string(&path) {
-                    Ok(s) => {
-                        if let Ok(score) = serde_json::from_str::<Score>(&s) {
-                            scores.push(score);
-                        }
-                    }
-                    Err(_) => continue,
-                }
-            }
-        }
-        scores.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        Ok(scores)
-    }
-
-    pub fn delete(&self, id: &str) -> Result<(), String> {
-        let path = self.dir.join(format!("{}.json", id));
-        fs::remove_file(path).map_err(|e| e.to_string())
+        Ok(())
     }
 }

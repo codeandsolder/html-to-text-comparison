@@ -21,11 +21,11 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(out_dir: PathBuf, html: String) -> Self {
+    pub const fn new(out_dir: PathBuf, html: String) -> Self {
         Self::with_timeout(out_dir, html, Duration::from_secs(10))
     }
 
-    pub fn with_timeout(out_dir: PathBuf, html: String, timeout: Duration) -> Self {
+    pub const fn with_timeout(out_dir: PathBuf, html: String, timeout: Duration) -> Self {
         Self {
             out_dir,
             html,
@@ -40,7 +40,7 @@ impl Runner {
         extractor: impl FnOnce(&str) -> String + Send + 'static,
     ) {
         let name = name.into();
-        let output_file = self.out_dir.join(format!("{}.txt", name));
+        let output_file = self.out_dir.join(format!("{name}.txt"));
         let html = self.html.clone();
         let timeout = self.timeout;
         eprintln!(
@@ -54,7 +54,7 @@ impl Runner {
             let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let start = Instant::now();
                 let result = extractor(&html);
-                let time_micros = start.elapsed().as_micros() as u64;
+                let time_micros = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
                 (result, time_micros)
             }));
             let _ = tx.send(result);
@@ -64,20 +64,19 @@ impl Runner {
             Ok(result) => match result {
                 Ok((output, time_micros)) => {
                     eprintln!(
-                        "[runner] finished extractor={name} time_us={} output_bytes={}",
-                        time_micros,
+                        "[runner] finished extractor={name} time_us={time_micros} output_bytes={}",
                         output.len()
                     );
                     (output, time_micros, false, String::new())
                 }
                 Err(e) => {
-                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = e.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "Unknown panic".to_string()
-                    };
+                    let msg = e.downcast_ref::<&str>().map_or_else(
+                        || {
+                            e.downcast_ref::<String>()
+                                .map_or_else(|| "Unknown panic".to_string(), Clone::clone)
+                        },
+                        ToString::to_string,
+                    );
                     eprintln!("[runner] panic extractor={name} error={msg}");
                     (String::new(), 0, true, msg)
                 }
@@ -95,12 +94,12 @@ impl Runner {
         };
 
         let final_output = if !error.is_empty() {
-            format!("[ERROR] {}\n", error)
+            format!("[ERROR] {error}\n")
         } else if output.is_empty() {
             "[ERROR] empty output — tool may not be installed, crashed, or returned no content]\n"
                 .to_string()
         } else {
-            output.clone()
+            output
         };
 
         self.stats.push(Stats {
@@ -124,7 +123,7 @@ impl Runner {
     }
 
     pub fn into_table(self) -> Table {
-        let mut stats = self.stats.clone();
+        let mut stats = self.stats;
         stats.sort_by_key(|s| s.name.clone());
 
         let mut table = Table::new();
@@ -139,10 +138,9 @@ impl Runner {
         ]);
         let numeric_columns = 1..=2;
         for column in numeric_columns {
-            table
-                .column_mut(column)
-                .unwrap()
-                .set_cell_alignment(CellAlignment::Right);
+            if let Some(column) = table.column_mut(column) {
+                column.set_cell_alignment(CellAlignment::Right);
+            }
         }
 
         for stat in &stats {
@@ -152,7 +150,7 @@ impl Runner {
                 &format!("{}", stat.output_size),
                 &format!(
                     "{:.2}%",
-                    100.0 - (stat.output_size as f64 / self.html.len() as f64) * 100.0
+                    crate::metrics::reduction_percent(stat.output_size, self.html.len())
                 ),
                 if stat.panicked { "YES" } else { "no" },
                 if stat.error.is_empty() {
@@ -176,9 +174,9 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn runner_times_out_stuck_extractor() {
+    fn runner_times_out_stuck_extractor() -> Result<(), Box<dyn std::error::Error>> {
         let out_dir = std::env::temp_dir().join(format!("runner_timeout_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::create_dir_all(&out_dir)?;
         let mut runner = Runner::with_timeout(
             out_dir.clone(),
             "hello".to_string(),
@@ -193,8 +191,9 @@ mod tests {
         let stats = runner.into_stats();
         assert_eq!(stats.len(), 1);
         assert!(stats[0].error.contains("timed out"));
-        let output = std::fs::read_to_string(out_dir.join("stuck.txt")).unwrap();
+        let output = std::fs::read_to_string(out_dir.join("stuck.txt"))?;
         assert!(output.contains("timed out"));
         let _ = std::fs::remove_dir_all(out_dir);
+        Ok(())
     }
 }

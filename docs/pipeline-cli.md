@@ -6,7 +6,7 @@ This document details the 9 CLI-based HTML-to-text extractors implemented in `sr
 
 ## turndown
 
-- **Tool location**: Node.js module at `/home/jan/git/turndown` (required via `require()` in inline code)
+- **Tool location**: Node.js module at `tools/extractors/node_modules/turndown` (required via `require()` in inline code)
 - **Invocation**: `node -e <inline_script> <temp_file>`
 - **HTML input method**: Temp file (written to system temp directory)
 - **Config bridge**: **NOT IMPLEMENTED** - `TurndownConfig` struct exists but is not passed to CLI
@@ -14,7 +14,7 @@ This document details the 9 CLI-based HTML-to-text extractors implemented in `sr
   1. Generate unique temp file path: `std::env::temp_dir().join(format!("turndown_{}.html", uuid::Uuid::new_v4()))`
   2. Write HTML content to temp file via `std::fs::write(&tmp, html)`
   3. Construct inline Node.js script that:
-     - Requires turndown module from `/home/jan/git/turndown`
+     - Requires the pinned turndown npm module installed by `npm ci --prefix tools/extractors`
      - Creates new `td()` service instance
      - Reads HTML from file path argument (`process.argv[1]`)
      - Calls `svc.turndown(html)` to convert
@@ -26,14 +26,14 @@ This document details the 9 CLI-based HTML-to-text extractors implemented in `sr
   - Exit code check: `if !o.status.success()` returns error with stderr
   - Empty output check: `if stdout.is_empty()` returns error with stderr
   - Process spawn failure: returns error message
-- **Dependencies**: Node.js runtime, turndown npm package installed at `/home/jan/git/turndown`
+- **Dependencies**: Node.js runtime and pinned npm dependencies installed with `PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts`
 
 **Exact command construction (lines 505-529)**:
 ```rust
 fn run_turndown(html: &str) -> String {
     let tmp = std::env::temp_dir().join(format!("turndown_{}.html", uuid::Uuid::new_v4()));
     let _ = std::fs::write(&tmp, html);
-    let node_code = r#"const fs = require('fs'); const td = require('/home/jan/git/turndown'); const svc = new td(); const html = fs.readFileSync(process.argv[1], 'utf8'); process.stdout.write(svc.turndown(html))"#;
+    let node_code = r#"const fs = require('fs'); const td = require('tools/extractors/node_modules/turndown'); const svc = new td(); const html = fs.readFileSync(process.argv[1], 'utf8'); process.stdout.write(svc.turndown(html))"#;
     let out = std::process::Command::new("node")
         .args(["-e", node_code, tmp.to_str().unwrap()])
         .output();
@@ -64,8 +64,8 @@ pub struct TurndownConfig {
 
 ## percollate
 
-- **Tool location**: `/home/jan/git/percollate/cli.js` (Node.js CLI script)
-- **Invocation**: `node /home/jan/git/percollate/cli.js md -o - <temp_file>`
+- **Tool location**: `tools/extractors/node_modules/percollate/cli.js` (Node.js CLI script)
+- **Invocation**: `node tools/extractors/node_modules/percollate/cli.js md -o - <temp_file>`
 - **HTML input method**: Temp file (written to system temp directory)
 - **Config bridge**: **NOT IMPLEMENTED** - `PercollateConfig` struct exists but is not passed to CLI
 - **Pipeline**:
@@ -81,7 +81,7 @@ pub struct TurndownConfig {
   - Exit code check: non-zero exit returns error with stderr
   - Empty output check: empty stdout returns error with stderr
   - Process spawn failure: returns error message
-- **Dependencies**: Node.js runtime, percollate npm package installed at `/home/jan/git/percollate`
+- **Dependencies**: Node.js runtime and pinned `percollate` npm dependency in `tools/extractors`
 
 **Exact command construction (lines 531-554)**:
 ```rust
@@ -89,7 +89,7 @@ fn run_percollate(html: &str) -> String {
     let tmp = std::env::temp_dir().join(format!("percollate_in_{}.html", uuid::Uuid::new_v4()));
     let _ = std::fs::write(&tmp, html);
     let out = std::process::Command::new("node")
-        .args(["/home/jan/git/percollate/cli.js", "md", "-o", "-", tmp.to_str().unwrap()])
+        .args(["tools/extractors/node_modules/percollate/cli.js", "md", "-o", "-", tmp.to_str().unwrap()])
         .output();
 
     let _ = std::fs::remove_file(&tmp);
