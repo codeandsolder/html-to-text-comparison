@@ -4,6 +4,7 @@ mod metrics;
 mod runner;
 mod scores;
 mod web;
+mod worker;
 
 use extractor_config::ExtractorStates;
 
@@ -11,11 +12,11 @@ use std::path::PathBuf;
 use std::process::exit;
 
 #[tokio::main]
-#[expect(
-    clippy::too_many_lines,
-    reason = "CLI extractor registration enumerates each optional crate and its conversion boundary; decomposition is tracked separately from strict error-handling migration"
-)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("--extract-worker") {
+        return crate::worker::worker_main().map_err(Into::into);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
@@ -30,7 +31,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(1);
         }
     } else if args.len() > 1 {
-        let input = args[1..].join(" ");
+        let (extractor, input_start) = if args[1] == "--extractor" {
+            let name = args.get(2).ok_or("--extractor requires a name")?;
+            (Some(name.as_str()), 3)
+        } else {
+            (None, 1)
+        };
+        if args.len() <= input_start {
+            return Err("missing HTML file or URL".into());
+        }
+        let input = args[input_start..].join(" ");
         let current_dir = std::env::current_dir()?;
         let out_dir = current_dir.join("out");
 
@@ -58,245 +68,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("HTML Size (bytes): {}", html.len());
 
         let mut runner = runner::Runner::new(out_dir, html);
-
-        #[cfg(feature = "readability")]
-        {
-            let url = url.clone();
-            runner.run("readability", move |html| {
-                let mut html = std::io::Cursor::new(html.as_bytes());
-                readability::extractor::extract(&mut html, &url).map_or_else(
-                    |error| format!("[ERROR] readability failed: {error:?}"),
-                    |result| result.text,
-                )
-            });
+        let states = ExtractorStates::default();
+        let mut names: Vec<_> = if let Some(extractor) = extractor {
+            let known = states.states.contains_key(extractor);
+            #[cfg(feature = "reader-lm-api")]
+            let known = known || extractor == "reader-lm-api";
+            if !known {
+                return Err(format!("unknown extractor: {extractor}").into());
+            }
+            vec![extractor.to_string()]
+        } else {
+            states.states.keys().cloned().collect()
+        };
+        names.sort();
+        for name in names {
+            runner.run_isolated(&name, &name, url.as_str(), &states);
         }
-
-        #[cfg(feature = "llm_readability")]
-        {
-            let url = url.clone();
-            runner.run("llm_readability", move |html| {
-                let mut html = std::io::Cursor::new(html.as_bytes());
-                llm_readability::extractor::extract(&mut html, &url).map_or_else(
-                    |error| format!("[ERROR] llm_readability failed: {error:?}"),
-                    |result| result.text,
-                )
-            });
-        }
-
-        #[cfg(feature = "html2text")]
-        {
-            runner.run("html2text", |html| {
-                let mut html = std::io::Cursor::new(html.as_bytes());
-                html2text::from_read(&mut html, 1000).unwrap_or_default()
-            });
-        }
-
-        #[cfg(feature = "htmd")]
-        {
-            static IGNORE_TAGS: &[&str] = &[
-                "nav", "script", "style", "header", "footer", "img", "svg", "iframe",
-            ];
-            runner.run("htmd", |html| {
-                htmd::HtmlToMarkdown::builder()
-                    .skip_tags(IGNORE_TAGS.to_vec())
-                    .build()
-                    .convert(html)
-                    .unwrap_or_default()
-            });
-        }
-
-        #[cfg(feature = "html2md-rs")]
-        {
-            use html2md_rs::structs::{NodeType, ToMdConfig};
-            use html2md_rs::to_md::safe_from_html_to_md_with_config;
-            static IGNORE_TAGS: &[&str] = &[
-                "nav", "script", "style", "header", "footer", "img", "svg", "iframe",
-            ];
-            runner.run("html2md-rs", |html| {
-                safe_from_html_to_md_with_config(
-                    html.to_string(),
-                    &ToMdConfig {
-                        ignore_rendering: IGNORE_TAGS
-                            .iter()
-                            .map(|tag| NodeType::from_tag_str(tag))
-                            .collect(),
-                    },
-                )
-                .unwrap_or_default()
-            });
-        }
-
-        #[cfg(feature = "nanohtml2text")]
-        {
-            runner.run("nanohtml2text", nanohtml2text::html2text);
-        }
-
-        #[cfg(feature = "readable-readability")]
-        {
-            let url = url.clone();
-            runner.run("readable-readability", move |html| {
-                let mut parser = readable_readability::Readability::new();
-                parser.base_url(url);
-                let (node, _metadata) = parser.parse(html);
-                node.text_contents()
-            });
-        }
-
-        #[cfg(feature = "mdka")]
-        {
-            runner.run("mdka", mdka::html_to_markdown);
-        }
-
-        #[cfg(feature = "boilerpipe")]
-        {
-            runner.run("boilerpipe", |html| {
-                boilerpipe::parse_document(html).content().to_string()
-            });
-        }
-
-        #[cfg(feature = "august")]
-        {
-            runner.run("august", |html| august::convert(html, usize::MAX));
-        }
-
-        #[cfg(feature = "fast_html2md")]
-        {
-            runner.run("fast_html2md", |html| fast_html2md::parse_html(html, false));
-        }
-
-        #[cfg(feature = "dom_smoothie")]
-        {
-            runner.run(
-                "dom_smoothie",
-                |html| match dom_smoothie::Readability::new(html, None, None) {
-                    Ok(mut parser) => match parser.parse() {
-                        Ok(result) => result.text_content.to_string(),
-                        Err(error) => format!("[ERROR] dom_smoothie parsing failed: {error:?}"),
-                    },
-                    Err(error) => format!("[ERROR] dom_smoothie setup failed: {error:?}"),
-                },
-            );
-        }
-
-        #[cfg(feature = "html2md")]
-        {
-            runner.run("html2md", html2md::parse_html);
-        }
-
-        #[cfg(feature = "mdream")]
-        {
-            use mdream::types::HTMLToMarkdownOptions;
-            runner.run("mdream", |html| {
-                mdream::html_to_markdown(html, HTMLToMarkdownOptions::default())
-            });
-        }
-
-        {
-            use scores::run_cli_extractor;
-            let placeholder = url::Url::parse("https://placeholder.example.com")?;
-            let placeholder_turndown = placeholder.clone();
-            runner.run("turndown", move |html| {
-                run_cli_extractor(
-                    "turndown",
-                    html,
-                    &ExtractorStates::default(),
-                    &placeholder_turndown,
-                )
-            });
-            let placeholder_percollate = placeholder.clone();
-            runner.run("percollate", move |html| {
-                run_cli_extractor(
-                    "percollate",
-                    html,
-                    &ExtractorStates::default(),
-                    &placeholder_percollate,
-                )
-            });
-            let placeholder_trafilatura = placeholder.clone();
-            runner.run("trafilatura", move |html| {
-                run_cli_extractor(
-                    "trafilatura",
-                    html,
-                    &ExtractorStates::default(),
-                    &placeholder_trafilatura,
-                )
-            });
-            let placeholder_html2text_py = placeholder.clone();
-            runner.run("html2text-py", move |html| {
-                run_cli_extractor(
-                    "html2text-py",
-                    html,
-                    &ExtractorStates::default(),
-                    &placeholder_html2text_py,
-                )
-            });
-            let placeholder_markdownify = placeholder.clone();
-            runner.run("markdownify", move |html| {
-                run_cli_extractor(
-                    "markdownify",
-                    html,
-                    &ExtractorStates::default(),
-                    &placeholder_markdownify,
-                )
-            });
-            let lightpanda_url = url.clone();
-            runner.run("lightpanda", move |_html| {
-                run_cli_extractor(
-                    "lightpanda",
-                    "",
-                    &ExtractorStates::default(),
-                    &lightpanda_url,
-                )
-            });
-            let placeholder_webclaw = placeholder.clone();
-            runner.run("webclaw", move |html| {
-                run_cli_extractor(
-                    "webclaw",
-                    html,
-                    &ExtractorStates::default(),
-                    &placeholder_webclaw,
-                )
-            });
-            let placeholder_e2m = placeholder;
-            runner.run("e2m", move |html| {
-                run_cli_extractor("e2m", html, &ExtractorStates::default(), &placeholder_e2m)
-            });
-            let html_to_markdown_go_url = url.clone();
-            runner.run("html-to-markdown-go", move |html| {
-                run_cli_extractor(
-                    "html-to-markdown-go",
-                    html,
-                    &ExtractorStates::default(),
-                    &html_to_markdown_go_url,
-                )
-            });
-        }
-
         #[cfg(feature = "reader-lm-api")]
-        {
-            let jina_api_key = std::env::var("JINA_API_KEY")?;
-            runner.run("reader-lm-api", move |_html| {
-                match ureq::get(&format!("https://r.jina.ai/{url}"))
-                    .set("authorization", &format!("Bearer {jina_api_key}"))
-                    .call()
-                {
-                    Ok(response) => {
-                        let mut html = String::new();
-                        match response.into_reader().read_to_string(&mut html) {
-                            Ok(_) => html,
-                            Err(error) => format!("[ERROR] reader-lm-api read failed: {error}"),
-                        }
-                    }
-                    Err(error) => format!("[ERROR] reader-lm-api request failed: {error}"),
-                }
-            });
+        if extractor.is_none() {
+            runner.run_isolated("reader-lm-api", "reader-lm-api", url.as_str(), &states);
         }
 
         println!("{}", runner.into_table());
         println!("Remember to check the output files to make sure they have parsed the information you expect!");
     } else {
         eprintln!("Usage:");
-        eprintln!("  {} <url_or_file>     Run CLI extraction", args[0]);
+        eprintln!("  {} <url_or_file>     Run all extractors", args[0]);
+        eprintln!(
+            "  {} --extractor <name> <url_or_file>     Run one extractor",
+            args[0]
+        );
         eprintln!("  {} --server [port]   Start web server", args[0]);
         eprintln!();
         eprintln!("Web server mode: {} --server 3000", args[0]);

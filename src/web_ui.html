@@ -1017,14 +1017,25 @@
                 name: `${extractor} current settings`,
                 output: '',
                 output_size: 0,
-                reduction_percent: 0,
+                reduction_percent: null,
                 time_micros: 0,
-                panicked: false
+                status: 'success',
+                error: ''
             };
             comparison.livePreviewPending = true;
             await ensureOutputLoaded(comparison.left);
             renderActiveWorkspace();
             await refreshLivePreview(extractor, announce);
+        }
+
+        function formatExtractorSummary(result) {
+            if (result.status && result.status !== 'success') {
+                return `${escapeHtml(result.status)} • ${escapeHtml(result.error || 'no output')}`;
+            }
+            const reduction = result.reduction_percent == null
+                ? 'reduction pending'
+                : `${result.reduction_percent.toFixed(1)}% smaller`;
+            return `${formatBytes(result.output_size)} • ${reduction} • ${formatMicros(result.time_micros)}`;
         }
 
         function setSummaryCounts() {
@@ -1265,7 +1276,7 @@
             activeScore = await res.json();
             activeOutputs = {};
             boilerplateState = { ...boilerplateState, loading: false, result: null, error: null, scoreId: activeScore.id };
-            const successful = activeScore.extractor_results.filter(result => !result.panicked);
+            const successful = activeScore.extractor_results.filter(result => result.status === 'success');
             const pinned = getHistoricalPinnedExtractor(activeScore);
             const left = pinned && successful.some(result => result.name === pinned)
                 ? pinned
@@ -1869,11 +1880,11 @@
                 <div class="compare-meta-row">
                     <div class="compare-meta-card">
                         <strong>${escapeHtml(leftResult?.name || 'None')}</strong>
-                        <span>${leftResult ? `${formatBytes(leftResult.output_size)} • ${leftResult.reduction_percent.toFixed(1)}% smaller • ${formatMicros(leftResult.time_micros)}${activeScore.grades?.[leftResult.name] !== undefined ? ` • grade ${activeScore.grades[leftResult.name]}` : ''}` : 'No left selection'}</span>
+                        <span>${leftResult ? `${formatExtractorSummary(leftResult)}${activeScore.grades?.[leftResult.name] !== undefined ? ` • grade ${activeScore.grades[leftResult.name]}` : ''}` : 'No left selection'}</span>
                     </div>
                     <div class="compare-meta-card">
                         <strong>${escapeHtml(rightResult?.name || 'None')}</strong>
-                        <span>${rightResult ? `${formatBytes(rightResult.output_size)} • ${rightResult.reduction_percent.toFixed(1)}% smaller • ${formatMicros(rightResult.time_micros)}${comparison.livePreviewPending ? ' • refreshing' : ''}${!livePreviewEnabled && activeScore.grades?.[rightResult.name] !== undefined ? ` • grade ${activeScore.grades[rightResult.name]}` : ''}` : 'No right selection'}</span>
+                        <span>${rightResult ? `${formatExtractorSummary(rightResult)}${comparison.livePreviewPending ? ' • refreshing' : ''}${!livePreviewEnabled && activeScore.grades?.[rightResult.name] !== undefined ? ` • grade ${activeScore.grades[rightResult.name]}` : ''}` : 'No right selection'}</span>
                     </div>
                 </div>
 
