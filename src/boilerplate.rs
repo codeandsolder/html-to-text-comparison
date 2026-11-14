@@ -310,10 +310,7 @@ fn markdownify_html(
     states: &ExtractorStates,
     parsed_url: &Url,
 ) -> Result<String, String> {
-    let markdown = run_cli_extractor("markdownify", html, states, parsed_url);
-    if markdown.starts_with("[ERROR]") {
-        return Err(markdown.trim().to_string());
-    }
+    let markdown = run_cli_extractor("markdownify", html, states, parsed_url)?;
     if markdown.trim().is_empty() {
         return Err("markdownify returned empty output".to_string());
     }
