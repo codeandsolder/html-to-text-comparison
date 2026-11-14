@@ -882,6 +882,7 @@
         function getConfigField(name, field) {
             const cfg = states.states?.[name]?.config || {};
             const configKey = FIELD_MAP[name]?.[field];
+            if (field === 'timeout_ms') return cfg.timeout_ms ?? 10000;
             if (!configKey) return undefined;
             if (configKey === field) return cfg[field];
             const value = cfg[configKey]?.[field];
@@ -897,6 +898,10 @@
             const cfg = states.states[name].config || {};
             states.states[name].config = cfg;
             const configKey = FIELD_MAP[name]?.[field];
+            if (field === 'timeout_ms') {
+                cfg.timeout_ms = value;
+                return;
+            }
             if (!configKey) return;
             if (configKey === field) cfg[field] = value;
             else {
@@ -931,6 +936,13 @@
             return {};
         }
 
+        function getExtractorExecutionPayload(name) {
+            return {
+                ...getExtractorConfigPayload(name),
+                timeout_ms: states.states?.[name]?.config?.timeout_ms
+            };
+        }
+
         function isConfigurableExtractor(name) {
             return CONFIGURABLE_EXTRACTORS.includes(name);
         }
@@ -943,7 +955,7 @@
             const res = await fetch(`/c/${name}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(getExtractorConfigPayload(name))
+                body: JSON.stringify(getExtractorExecutionPayload(name))
             });
             if (!res.ok) throw new Error(await res.text());
         }
@@ -978,7 +990,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         extractor,
-                        config: getExtractorConfigPayload(extractor)
+                        config: getExtractorExecutionPayload(extractor)
                     })
                 });
                 if (!res.ok) throw new Error(await res.text());
@@ -1019,6 +1031,7 @@
                 output_size: 0,
                 reduction_percent: null,
                 time_micros: 0,
+                wall_time_micros: 0,
                 status: 'success',
                 error: ''
             };
@@ -1035,7 +1048,10 @@
             const reduction = result.reduction_percent == null
                 ? 'reduction pending'
                 : `${result.reduction_percent.toFixed(1)}% smaller`;
-            return `${formatBytes(result.output_size)} • ${reduction} • ${formatMicros(result.time_micros)}`;
+            const fullDuration = result.wall_time_micros == null
+                ? ''
+                : ` • ${formatMicros(result.wall_time_micros)} end-to-end`;
+            return `${formatBytes(result.output_size)} • ${reduction} • ${formatMicros(result.time_micros)} conversion${fullDuration}`;
         }
 
         function setSummaryCounts() {
@@ -1083,7 +1099,7 @@
                 const resolved = Number.isFinite(value) ? value : '';
                 return `<div class="config-field">
                     <label for="${name}-${field.name}">${escapeHtml(field.name)}</label>
-                    <input id="${name}-${field.name}" type="number" ${field.float ? 'step="any"' : ''} value="${resolved}" oninput="updateConfig('${name}','${field.name}',this.value === '' ? null : ${field.float ? 'parseFloat(this.value)' : 'parseInt(this.value, 10)'}, true)">
+                    <input id="${name}-${field.name}" type="number" ${field.name === 'timeout_ms' ? 'min="1" max="900000" step="100"' : (field.float ? 'step="any"' : '')} value="${resolved}" oninput="updateConfig('${name}','${field.name}',this.value === '' ? null : ${field.float ? 'parseFloat(this.value)' : 'parseInt(this.value, 10)'}, true)">
                 </div>`;
             }
             return `<div class="config-field">
@@ -1110,7 +1126,7 @@
             const sorted = getSettingsSortedExtractors();
             el.innerHTML = sorted.map(name => {
                 const state = states.states?.[name] || { enabled: true, config: {} };
-                const fields = CONFIG_FIELDS[name] || [];
+                const fields = [...(CONFIG_FIELDS[name] || []), {name:'timeout_ms',type:'number'}];
                 return `<section class="extractor-card ${state.enabled ? 'enabled' : 'disabled'}">
                     <div class="extractor-head">
                         <div class="extractor-main">
@@ -1121,7 +1137,7 @@
                             </div>
                         </div>
                     </div>
-                    ${fields.length ? `<div class="config-grid">${fields.map(field => renderConfigField(name, field)).join('')}</div>` : ''}
+                    <div class="config-grid">${fields.map(field => renderConfigField(name, field)).join('')}</div>
                 </section>`;
             }).join('');
         }
@@ -1132,6 +1148,7 @@
         }
 
         async function updateConfig(name, key, value, defer = false) {
+            if (key === 'timeout_ms' && (!Number.isInteger(value) || value < 1 || value > 900000)) return;
             if (key === 'skip_tags' || key === 'ignore_tags' || key === 'plugins' || key === 'classes_to_preserve' || key === 'filter_include' || key === 'filter_exclude' || key === 'frontmatter_meta_fields' || key === 'extraction_selectors' || key === 'langs') {
                 value = String(value || '').split(',').map(part => part.trim()).filter(Boolean);
             }
