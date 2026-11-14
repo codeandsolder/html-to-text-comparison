@@ -25,7 +25,11 @@ impl ExtractionStatus {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Stats {
     pub name: String,
+    /// Extractor execution time inside the worker (external tools include their startup).
     pub time_micros: u64,
+    /// End-to-end parent elapsed time: request serialization, worker startup, execution,
+    /// IPC, validation, and cleanup.
+    pub wall_time_micros: u64,
     pub output_size: usize,
     pub status: ExtractionStatus,
     pub error: String,
@@ -35,20 +39,27 @@ pub struct Runner {
     out_dir: PathBuf,
     html: String,
     stats: Vec<Stats>,
-    timeout: Duration,
+    timeout_override: Option<Duration>,
 }
 
 impl Runner {
     pub const fn new(out_dir: PathBuf, html: String) -> Self {
-        Self::with_timeout(out_dir, html, Duration::from_secs(10))
+        Self {
+            out_dir,
+            html,
+            stats: Vec::new(),
+            timeout_override: None,
+        }
     }
 
+    /// Explicit override used by controlled deadline integration tests.
+    #[cfg(test)]
     pub const fn with_timeout(out_dir: PathBuf, html: String, timeout: Duration) -> Self {
         Self {
             out_dir,
             html,
             stats: Vec::new(),
-            timeout,
+            timeout_override: Some(timeout),
         }
     }
 
@@ -100,6 +111,7 @@ impl Runner {
         let stat = Stats {
             name,
             time_micros: elapsed,
+            wall_time_micros: elapsed,
             output_size,
             status,
             error,
@@ -123,6 +135,15 @@ impl Runner {
         url: &str,
         states: &crate::extractor_config::ExtractorStates,
     ) {
+        let started = Instant::now();
+        let timeout = self.timeout_override.unwrap_or_else(|| {
+            states
+                .states
+                .get(extractor_key)
+                .map_or(Duration::from_secs(10), |state| {
+                    state.timeout(extractor_key)
+                })
+        });
         let outcome = crate::worker::execute_isolated(
             &self.out_dir,
             &self.html,
@@ -130,7 +151,7 @@ impl Runner {
             output_name,
             url,
             states,
-            self.timeout,
+            timeout,
         );
         let stat = outcome.unwrap_or_else(|error| Stats {
             name: output_name.to_string(),
@@ -145,7 +166,10 @@ impl Runner {
                 eprintln!("Cannot write diagnostic {}: {error}", output_file.display());
             }
         }
-        self.stats.push(stat);
+        self.stats.push(Stats {
+            wall_time_micros: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+            ..stat
+        });
     }
 
     pub fn into_stats(self) -> Vec<Stats> {
@@ -159,14 +183,15 @@ impl Runner {
         let mut table = Table::new();
         table.set_header(vec![
             "Name",
-            "Time (microseconds)",
+            "Conversion (µs)",
+            "End-to-end (µs)",
             "Output Size (bytes)",
             "% Reduction",
             "Status",
             "Error",
             "Output File",
         ]);
-        let numeric_columns = 1..=2;
+        let numeric_columns = 1..=3;
         for column in numeric_columns {
             if let Some(column) = table.column_mut(column) {
                 column.set_cell_alignment(CellAlignment::Right);
@@ -177,6 +202,7 @@ impl Runner {
             table.add_row(vec![
                 stat.name.as_str(),
                 &format!("{}", stat.time_micros),
+                &format!("{}", stat.wall_time_micros),
                 &format!("{}", stat.output_size),
                 &if stat.status.is_success() {
                     format!(
@@ -232,6 +258,7 @@ mod tests {
         let stats = runner.into_stats();
         assert_eq!(stats[0].status, ExtractionStatus::Success);
         assert_eq!(stats[0].output_size, "Converted".len());
+        assert!(stats[0].wall_time_micros >= stats[0].time_micros);
         assert_eq!(stats[1].status, ExtractionStatus::Failed);
         assert_eq!(stats[1].output_size, 0);
         assert_eq!(stats[1].error, "tool missing");

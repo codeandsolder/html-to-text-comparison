@@ -23,103 +23,34 @@ I am particularly interested in picking one to use for [Scour](https://scour.ing
 
 ## Usage
 
-```sh
-cargo run --release -- <url-to-scrape>
-```
-
-This will:
-
-1. Download the page from the given URL
-2. Run the HTML through the extractor from each crate once to measure the memory usage
-3. Run the HTML through the extractor from each crate once more to measure the time
-4. Write the output to a file in `out/`
-5. Print a table of the results
-
-### Warning: check the output!
-
-It is important to check the output files to ensure they contain the information you expect!
-
-For example, the various readability crates seem to miss most of the content from Github repositories.
-In the [mozilla/readability example](#https://github.com/mozilla/readability), the output is just the string `"mozilla/readability"` for the `llm_readability` crate and `" You can’t perform that action at this time."` for `readability` and `readable-readability`.
-
-## Examples
-
-### `https://example.com`
+Install pinned Node extractor packages once (Python tools are managed through `uv`):
 
 ```sh
+PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts --no-audit --no-fund
+cargo run --release -- --extractor nanohtml2text example.html
 cargo run --release -- https://example.com
-    Finished `release` profile [optimized] target(s) in 0.12s
-     Running `target/release/html-to-text-comparison 'https://example.com'`
-HTML Size (bytes): 1256
-+----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------+
-| Name                 | Time (microseconds) | Peak Memory (bytes) | Peak Memory as % of HTML Size | Output Size (bytes) | % Reduction | Output File                  |
-+======================================================================================================================================================+
-| august               |                  52 |               33239 |                      2646.42% |                 228 | 81.85%      | out/august.txt               |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| boilerpipe           |                  46 |               65702 |                      5231.05% |                 171 | 86.39%      | out/boilerpipe.txt           |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| dom_smoothie         |                 478 |               61156 |                      4869.11% |                 191 | 84.79%      | out/dom_smoothie.txt         |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| fast_html2md         |                  56 |                3260 |                       259.55% |                 229 | 81.77%      | out/fast_html2md.txt         |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| htmd                 |                  83 |                1948 |                       155.10% |                 247 | 80.33%      | out/htmd.txt                 |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| html2md              |                  48 |               44906 |                      3575.32% |                 726 | 42.20%      | out/html2md.txt              |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| html2md-rs           |                   3 |                 275 |                        21.89% |                   0 | 100.00%     | out/html2md-rs.txt           |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| html2text            |                  77 |                1767 |                       140.68% |                 240 | 80.89%      | out/html2text.txt            |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| llm_readability      |                 129 |               35049 |                      2790.53% |                 189 | 84.95%      | out/llm_readability.txt      |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| mdka                 |                  54 |                1585 |                       126.19% |                 241 | 80.81%      | out/mdka.txt                 |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| nanohtml2text        |                  13 |                 308 |                        24.52% |                 250 | 80.10%      | out/nanohtml2text.txt        |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| readability          |                 112 |               35034 |                      2789.33% |                 175 | 86.07%      | out/readability.txt          |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| readable-readability |                  59 |               43369 |                      3452.95% |                 175 | 86.07%      | out/readable-readability.txt |
-+----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------+
-Remember to check the output files to make sure they have parsed the information you expect!
 ```
 
-### `https://github.com/mozilla/readability`
+CLI results are written to `out/`. Every converter uses the same registry as the web UI and runs in its own killable process group. You can select a single extractor with `--extractor NAME`. Check the resulting text for missing, unwanted or misleading content; a short output is not necessarily a good output.
+
+### Web UI and storage
 
 ```sh
-cargo run --release -- https://github.com/mozilla/readability
-    Finished `release` profile [optimized] target(s) in 0.40s
-     Running `target/release/html-to-text-comparison 'https://github.com/mozilla/readability'`
-HTML Size (bytes): 351119
-+----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------+
-| Name                 | Time (microseconds) | Peak Memory (bytes) | Peak Memory as % of HTML Size | Output Size (bytes) | % Reduction | Output File                  |
-+=====================================================================================================================================================================+
-| august               |                6787 |              216751 |                        62.31% |               13536 | 96.11%      | out/august.txt               |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| boilerpipe           |                6925 |              341350 |                        98.12% |                 266 | 99.92%      | out/boilerpipe.txt           |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| dom_smoothie         |               12798 |              502011 |                       144.31% |                6446 | 98.15%      | out/dom_smoothie.txt         |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| fast_html2md         |                3749 |                8707 |                         2.50% |               16111 | 95.37%      | out/fast_html2md.txt         |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| htmd                 |                6513 |              161810 |                        46.51% |               14513 | 95.83%      | out/htmd.txt                 |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| html2md              |                7742 |              203230 |                        58.42% |               91829 | 73.60%      | out/html2md.txt              |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| html2md-rs           |                4493 |              244909 |                        70.40% |               18209 | 94.77%      | out/html2md-rs.txt           |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| html2text            |                7899 |              246373 |                        70.82% |               29542 | 91.51%      | out/html2text.txt            |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| llm_readability      |                5105 |              146341 |                        42.07% |                  19 | 99.99%      | out/llm_readability.txt      |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| mdka                 |                6469 |              208730 |                        60.00% |                6948 | 98.00%      | out/mdka.txt                 |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| nanohtml2text        |                2750 |               86048 |                        24.73% |               19163 | 94.49%      | out/nanohtml2text.txt        |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| readability          |                6177 |              152909 |                        43.95% |                  53 | 99.98%      | out/readability.txt          |
-|----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------|
-| readable-readability |                6197 |              214737 |                        61.73% |                  53 | 99.98%      | out/readable-readability.txt |
-+----------------------+---------------------+---------------------+-------------------------------+---------------------+-------------+------------------------------+
+HTML_TO_TEXT_MAX_SAVED_RUNS=100 cargo run --release -- --server 3000 /path/to/data
 ```
+
+The server stores score metadata under `/path/to/data/scores`, with corresponding HTML snapshots and extractor outputs under `/path/to/data/scores/artifacts/<run-id>/`. The retention cap defaults to 100 saved runs, can be set through `HTML_TO_TEXT_MAX_SAVED_RUNS` (positive integer), and deletes old outputs together with their metadata. Failed/empty runs remain inspectable until deleted or expired. Live previews use ephemeral directories.
+
+Every extractor has an independently configurable process deadline (`timeout_ms` in its state, editable in the web UI). Defaults are 10 seconds for native extractors, longer for external tools, and 120 seconds for E2M. A deadline kills the entire worker process group, including spawned tools.
+
+### Interpreting measurements
+
+- **Conversion time (`time_micros`)** measures the conversion call inside the isolated worker. For external Node/Python/Go tools this *includes* launching their child process and doing tool I/O.
+- **End-to-end time (`wall_time_micros`)** measures the parent's full per-extractor operation, including preparing IPC data, starting and reaping the worker and reading its response. It is never a pure algorithm microbenchmark.
+- Output-size reduction is reported only for successful conversions. Failed, timed-out and empty conversions have a `null` reduction value, not a misleading 100% reduction.
+- The tool does **not** currently measure peak memory or statistical latency distributions. These require a separately designed repeatable benchmark mode.
+
+Historical tables from the original prototype are deliberately not shown as current benchmark results: they predate process isolation, contain memory claims that the current harness does not measure, and used different error semantics. They remain accessible in the repository's earlier Git history.
 
 ## Optional: Jina `reader-lm`
 

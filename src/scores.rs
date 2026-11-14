@@ -34,6 +34,7 @@ pub struct ExtractorResult {
     pub output_size: usize,
     pub reduction_percent: Option<f64>,
     pub time_micros: u64,
+    pub wall_time_micros: u64,
     pub status: ExtractionStatus,
     pub error: String,
     pub output_file: String,
@@ -47,22 +48,28 @@ pub struct ExtractorPreview {
     pub output_size: usize,
     pub reduction_percent: Option<f64>,
     pub time_micros: u64,
+    pub wall_time_micros: u64,
     pub status: ExtractionStatus,
     pub error: String,
 }
 
 impl Score {
-    pub fn new(url: String, html: String, states: &ExtractorStates) -> Result<Self, String> {
+    pub fn new(
+        url: String,
+        html: String,
+        states: &ExtractorStates,
+        store: &ScoreStore,
+    ) -> Result<Self, String> {
         let id = Uuid::new_v4().to_string();
         let timestamp = chrono_lite_now();
         let html_size = html.len();
-        let out_dir = PathBuf::from("/tmp/html-extract").join(&id);
-        fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
+        let parsed_url = url::Url::parse(&url).map_err(|error| error.to_string())?;
+        let out_dir = store.create_run_dir(&id)?;
+        let mut guard = OwnedRunDir::new(out_dir.clone());
         let source_html_file = out_dir.join("source.html");
         fs::write(&source_html_file, &html).map_err(|error| error.to_string())?;
-        let parsed_url = url::Url::parse(&url).map_err(|error| error.to_string())?;
 
-        let mut runner = Runner::new(out_dir, html);
+        let mut runner = Runner::new(out_dir.clone(), html);
         let states = states.clone();
 
         for extractor_name in enabled_extractors(&states) {
@@ -70,7 +77,6 @@ impl Score {
         }
 
         let outcomes = runner.into_stats();
-        let out_dir = PathBuf::from("/tmp/html-extract").join(&id);
         let extractor_results: Vec<ExtractorResult> = outcomes
             .iter()
             .map(|stat| ExtractorResult {
@@ -82,6 +88,7 @@ impl Score {
                     .is_success()
                     .then(|| crate::metrics::reduction_percent(stat.output_size, html_size)),
                 time_micros: stat.time_micros,
+                wall_time_micros: stat.wall_time_micros,
                 status: stat.status,
                 error: stat.error.clone(),
                 output_file: out_dir
@@ -91,7 +98,7 @@ impl Score {
             })
             .collect();
 
-        Ok(Self {
+        let result_record = Self {
             id,
             url,
             html_size,
@@ -100,7 +107,9 @@ impl Score {
             settings_snapshot: states,
             grades: BTreeMap::new(),
             extractor_results,
-        })
+        };
+        guard.persist();
+        Ok(result_record)
     }
 }
 
@@ -476,11 +485,11 @@ pub fn compare_single_extractor_settings(
     let id = Uuid::new_v4().to_string();
     let timestamp = chrono_lite_now();
     let html_size = html.len();
-    let out_dir = PathBuf::from("/tmp/html-extract").join(&id);
-    fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
+    let parsed_url = url::Url::parse(url).map_err(|error| error.to_string())?;
+    let out_dir = score_store.create_run_dir(&id)?;
+    let mut guard = OwnedRunDir::new(out_dir.clone());
     let source_html_file = out_dir.join("source.html");
     fs::write(&source_html_file, html).map_err(|error| error.to_string())?;
-    let parsed_url = url::Url::parse(url).map_err(|error| error.to_string())?;
 
     let mut runner = Runner::new(out_dir.clone(), html.to_string());
     let baseline_name = format!("{extractor} baseline");
@@ -510,6 +519,7 @@ pub fn compare_single_extractor_settings(
                 .is_success()
                 .then(|| crate::metrics::reduction_percent(stat.output_size, html_size)),
             time_micros: stat.time_micros,
+            wall_time_micros: stat.wall_time_micros,
             status: stat.status,
             error: stat.error,
             output_file: out_dir
@@ -535,6 +545,8 @@ pub fn compare_single_extractor_settings(
         extractor_results,
     };
     score_store.save(&score)?;
+    guard.persist();
+    score_store.prune()?;
     Ok(score)
 }
 
@@ -547,16 +559,14 @@ pub fn preview_single_extractor_settings(
     let states = single_extractor_state(extractor, config);
     let parsed_url = url::Url::parse(url).map_err(|error| error.to_string())?;
     let html_size = html.len();
-    let out_dir = PathBuf::from("/tmp/html-extract-preview").join(Uuid::new_v4().to_string());
-    fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
-
+    let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let out_dir = temporary.path().to_path_buf();
     let mut runner = Runner::new(out_dir.clone(), html.to_string());
     runner.run_isolated(extractor, extractor, parsed_url.as_str(), &states);
 
     let stat = runner.into_stats().into_iter().next().unwrap_or_default();
     let output = std::fs::read_to_string(out_dir.join(format!("{extractor}.txt")))
         .map_err(|error| error.to_string())?;
-    fs::remove_dir_all(&out_dir).map_err(|error| error.to_string())?;
 
     Ok(ExtractorPreview {
         name: format!("{extractor} current settings"),
@@ -567,6 +577,7 @@ pub fn preview_single_extractor_settings(
             .is_success()
             .then(|| crate::metrics::reduction_percent(stat.output_size, html_size)),
         time_micros: stat.time_micros,
+        wall_time_micros: stat.wall_time_micros,
         status: stat.status,
         error: stat.error,
         output,
@@ -593,8 +604,12 @@ pub fn run_extraction(
     states: &ExtractorStates,
     score_store: &ScoreStore,
 ) -> Result<Score, String> {
-    let score = Score::new(url.to_string(), html.to_string(), states)?;
-    score_store.save(&score)?;
+    let score = Score::new(url.to_string(), html.to_string(), states, score_store)?;
+    if let Err(error) = score_store.save(&score) {
+        let _ = score_store.remove_artifacts(&score.id);
+        return Err(error);
+    }
+    score_store.prune()?;
     Ok(score)
 }
 
@@ -1238,24 +1253,149 @@ fn run_html_to_markdown_go(
     command_output_text(out, "html-to-markdown-go")
 }
 
+/// Deletes incomplete runs; persist only after all metadata has been committed.
+struct OwnedRunDir {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl OwnedRunDir {
+    const fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    const fn persist(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for OwnedRunDir {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ScoreStore {
     dir: PathBuf,
+    max_saved_runs: usize,
 }
 
 impl ScoreStore {
-    pub fn new(dir: PathBuf) -> Self {
-        let _ = fs::create_dir_all(&dir);
-        Self { dir }
+    pub fn with_retention(dir: PathBuf, max_saved_runs: usize) -> Result<Self, String> {
+        if max_saved_runs == 0 {
+            return Err("retention limit must be at least 1 saved run".to_string());
+        }
+        fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        Ok(Self {
+            dir,
+            max_saved_runs,
+        })
+    }
+
+    /// Retention is count-bounded and deterministic. Metadata and every artifact
+    /// directory are removed together, even if the run used zero extractors.
+    pub fn prune(&self) -> Result<(), String> {
+        for score in self.list()?.iter().skip(self.max_saved_runs) {
+            self.delete(&score.id)?;
+        }
+        // Completed runs without metadata can only be leftovers from an
+        // interrupted process. Delay cleanup past the maximum supported
+        // 15-minute extraction deadline to avoid deleting in-flight work.
+        self.prune_orphans(std::time::Duration::from_hours(24))
+    }
+
+    fn prune_orphans(&self, minimum_age: std::time::Duration) -> Result<(), String> {
+        let root = self.dir.join("artifacts");
+        if !root.exists() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            if !entry
+                .file_type()
+                .map_err(|error| error.to_string())?
+                .is_dir()
+            {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(id) = name.to_str().and_then(|name| Uuid::parse_str(name).ok()) else {
+                continue;
+            };
+            if self.dir.join(format!("{id}.json")).exists() {
+                continue;
+            }
+            let age = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .map_err(|error| error.to_string())?
+                .elapsed()
+                .map_err(|error| error.to_string())?;
+            if age >= minimum_age {
+                fs::remove_dir_all(entry.path()).map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn artifact_dir(&self, id: &str) -> Result<PathBuf, String> {
+        let parsed = Uuid::parse_str(id).map_err(|error| format!("invalid score ID: {error}"))?;
+        Ok(self.dir.join("artifacts").join(parsed.to_string()))
+    }
+
+    pub fn output_path(&self, id: &str, name: &str) -> Result<PathBuf, String> {
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == ' ')
+        {
+            return Err("invalid extractor output name".to_string());
+        }
+        Ok(self.artifact_dir(id)?.join(format!("{name}.txt")))
+    }
+
+    pub fn source_path(&self, id: &str) -> Result<PathBuf, String> {
+        Ok(self.artifact_dir(id)?.join("source.html"))
+    }
+
+    fn create_run_dir(&self, id: &str) -> Result<PathBuf, String> {
+        let path = self.artifact_dir(id)?;
+        fs::create_dir_all(self.dir.join("artifacts")).map_err(|error| error.to_string())?;
+        fs::create_dir(&path).map_err(|error| error.to_string())?;
+        Ok(path)
+    }
+
+    pub fn remove_artifacts(&self, id: &str) -> Result<(), String> {
+        let path = self.artifact_dir(id)?;
+        if path.exists() {
+            fs::remove_dir_all(path).map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     pub fn save(&self, score: &Score) -> Result<(), String> {
-        let path = self.dir.join(format!("{}.json", score.id));
-        let s = serde_json::to_string_pretty(score).map_err(|e| e.to_string())?;
-        fs::write(path, s).map_err(|e| e.to_string())
+        let path = self.dir.join(format!(
+            "{}.json",
+            Uuid::parse_str(&score.id).map_err(|error| format!("invalid score ID: {error}"))?
+        ));
+        let content = serde_json::to_vec_pretty(score).map_err(|error| error.to_string())?;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(&self.dir).map_err(|error| error.to_string())?;
+        temporary
+            .write_all(&content)
+            .map_err(|error| error.to_string())?;
+        temporary.persist(path).map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     pub fn load(&self, id: &str) -> Result<Score, String> {
+        let id = Uuid::parse_str(id).map_err(|error| format!("invalid score ID: {error}"))?;
         let path = self.dir.join(format!("{id}.json"));
         let s = read_to_string(path).map_err(|e| e.to_string())?;
         serde_json::from_str(&s).map_err(|e| e.to_string())
@@ -1281,13 +1421,18 @@ impl ScoreStore {
                 }
             }
         }
-        scores.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        scores.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.id.cmp(&a.id)));
         Ok(scores)
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
+        let id = Uuid::parse_str(id).map_err(|error| format!("invalid score ID: {error}"))?;
         let path = self.dir.join(format!("{id}.json"));
-        fs::remove_file(path).map_err(|e| e.to_string())
+        if !path.is_file() {
+            return Err(format!("score not found: {id}"));
+        }
+        self.remove_artifacts(&id.to_string())?;
+        fs::remove_file(path).map_err(|error| error.to_string())
     }
 }
 
@@ -1299,15 +1444,83 @@ mod tests {
         PercollateConfig,
     };
 
-    fn test_store() -> (ScoreStore, PathBuf) {
+    fn test_store() -> Result<(ScoreStore, PathBuf), String> {
         let dir =
             std::env::temp_dir().join(format!("html-to-text-comparison-tests-{}", Uuid::new_v4()));
-        (ScoreStore::new(dir.clone()), dir)
+        Ok((ScoreStore::with_retention(dir.clone(), 100)?, dir))
+    }
+
+    #[test]
+    fn deleting_empty_run_removes_source_and_metadata() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let repository = ScoreStore::with_retention(root.path().join("scores"), 10)?;
+        let mut states = ExtractorStates::default();
+        for extractor in states.states.values_mut() {
+            extractor.enabled = false;
+        }
+
+        let run = run_extraction(
+            "https://example.com/article",
+            "<h1>Saved exactly once</h1>",
+            &states,
+            &repository,
+        )?;
+        assert!(run.extractor_results.is_empty());
+        assert_eq!(
+            fs::read_to_string(repository.source_path(&run.id)?)?,
+            "<h1>Saved exactly once</h1>"
+        );
+        assert_eq!(repository.list()?.len(), 1);
+        assert!(repository.artifact_dir(&run.id)?.exists());
+        repository.delete(&run.id)?;
+        assert!(repository.list()?.is_empty());
+        assert!(!repository.artifact_dir(&run.id)?.exists());
+        assert!(repository.delete("../outside").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn retention_prunes_both_metadata_and_artifacts() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let repository = ScoreStore::with_retention(root.path().join("scores"), 2)?;
+        let mut states = ExtractorStates::default();
+        for extractor in states.states.values_mut() {
+            extractor.enabled = false;
+        }
+
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let run = run_extraction("https://example.com/", "one", &states, &repository)?;
+            ids.push(run.id);
+        }
+        let saved = repository.list()?;
+        assert_eq!(saved.len(), 2);
+        for id in ids {
+            let preserved = saved.iter().any(|record| record.id == id);
+            assert_eq!(preserved, repository.artifact_dir(&id)?.exists());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn orphan_cleanup_preserves_live_runs_and_reaps_old_ones(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let repository = ScoreStore::with_retention(root.path().join("scores"), 10)?;
+        let id = Uuid::new_v4().to_string();
+        let path = repository.create_run_dir(&id)?;
+        fs::write(path.join("source.html"), "uncommitted")?;
+
+        repository.prune()?;
+        assert!(path.exists(), "new in-flight run must not be removed");
+        repository.prune_orphans(std::time::Duration::ZERO)?;
+        assert!(!path.exists(), "stale orphan must be removed");
+        Ok(())
     }
 
     #[test]
     fn compare_settings_applies_html2text_config() -> Result<(), Box<dyn std::error::Error>> {
-        let (score_store, dir) = test_store();
+        let (score_store, dir) = test_store()?;
         let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
         let baseline = ExtractorConfig {
             html2text: Html2TextConfig {
@@ -1353,7 +1566,7 @@ mod tests {
 
     #[test]
     fn compare_settings_applies_htmd_heading_style() -> Result<(), Box<dyn std::error::Error>> {
-        let (score_store, dir) = test_store();
+        let (score_store, dir) = test_store()?;
         let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
             htmd: HtmdConfig {
@@ -1394,7 +1607,7 @@ mod tests {
 
     #[test]
     fn compare_settings_applies_turndown_heading_style() -> Result<(), Box<dyn std::error::Error>> {
-        let (score_store, dir) = test_store();
+        let (score_store, dir) = test_store()?;
         let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
             turndown: TurndownConfig {
@@ -1448,7 +1661,7 @@ mod tests {
     #[test]
     fn compare_settings_applies_percollate_markdown_options(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let (score_store, dir) = test_store();
+        let (score_store, dir) = test_store()?;
         let html = "<html><body><pre><code>code</code></pre><hr><p>Body</p></body></html>";
         let baseline = ExtractorConfig {
             percollate: PercollateConfig {
@@ -1492,7 +1705,7 @@ mod tests {
     #[test]
     fn compare_settings_applies_trafilatura_metadata_option(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let (score_store, dir) = test_store();
+        let (score_store, dir) = test_store()?;
         let html = "<html><head><title>Title</title></head><body><article><p>Body</p></article></body></html>";
         let baseline = ExtractorConfig {
             trafilatura: TrafilaturaConfig {
@@ -1533,7 +1746,7 @@ mod tests {
     #[test]
     fn compare_settings_applies_dom_smoothie_candidate_selection_mode(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let (score_store, dir) = test_store();
+        let (score_store, dir) = test_store()?;
         let html = "<html><body><main><div><div><div><div><p>Alice was beginning to get very tired of sitting by her sister on the bank.</p></div></div></div><div><div><div><p>So she was considering in her own mind whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies.</p></div></div></div></main></body></html>";
         let baseline = ExtractorConfig {
             dom_smoothie: crate::extractor_config::DomSmoothieConfig {

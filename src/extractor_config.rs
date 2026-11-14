@@ -540,6 +540,8 @@ impl Default for DomSmoothieConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExtractorConfig {
+    /// Hard process deadline; None uses a backend-specific default.
+    pub timeout_ms: Option<u64>,
     pub skip_tags: Vec<String>,
     pub html2text: Html2TextConfig,
     pub htmd: HtmdConfig,
@@ -566,6 +568,26 @@ pub struct ExtractorState {
     pub config: ExtractorConfig,
 }
 
+pub fn default_timeout_ms(name: &str) -> u64 {
+    match name {
+        "e2m" => 120_000,
+        "lightpanda" | "webclaw" => 60_000,
+        "percollate" | "trafilatura" | "markdownify" | "html2text-py" => 45_000,
+        "turndown" | "html-to-markdown-go" => 30_000,
+        _ => 10_000,
+    }
+}
+
+impl ExtractorState {
+    pub fn timeout(&self, name: &str) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.config
+                .timeout_ms
+                .unwrap_or_else(|| default_timeout_ms(name)),
+        )
+    }
+}
+
 impl Default for ExtractorState {
     fn default() -> Self {
         Self {
@@ -587,7 +609,10 @@ impl ExtractorStates {
             Ok(s) => {
                 if let Ok(loaded) = serde_json::from_str::<Self>(&s) {
                     let mut merged = defaults;
-                    for (name, state) in loaded.states {
+                    for (name, mut state) in loaded.states {
+                        if state.config.timeout_ms.is_none() {
+                            state.config.timeout_ms = Some(default_timeout_ms(&name));
+                        }
                         merged.states.insert(name, state);
                     }
                     merged
@@ -755,7 +780,10 @@ impl Default for ExtractorStates {
                 name.to_string(),
                 ExtractorState {
                     enabled: true,
-                    config: cfg,
+                    config: ExtractorConfig {
+                        timeout_ms: Some(default_timeout_ms(name)),
+                        ..cfg
+                    },
                 },
             );
         }
@@ -766,6 +794,22 @@ impl Default for ExtractorStates {
 #[cfg(test)]
 mod tests {
     use super::MdkaConfig;
+
+    #[test]
+    fn extractor_timeouts_match_backend_costs() {
+        let states = super::ExtractorStates::default();
+        assert_eq!(states.states["e2m"].timeout("e2m").as_millis(), 120_000);
+        assert_eq!(
+            states.states["trafilatura"]
+                .timeout("trafilatura")
+                .as_millis(),
+            45_000
+        );
+        assert_eq!(
+            states.states["html2text"].timeout("html2text").as_millis(),
+            10_000
+        );
+    }
 
     #[test]
     fn mdka_config_preserves_mode_defaults_when_optional_flags_are_unset() {

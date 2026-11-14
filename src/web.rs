@@ -24,7 +24,13 @@ pub async fn start_server(port: u16, data_dir: PathBuf) -> Result<(), String> {
     let states_path = data_dir.join("extractor_states.json");
     let scores_path = data_dir.join("scores");
 
-    let score_store = ScoreStore::new(scores_path);
+    let max_saved_runs = std::env::var("HTML_TO_TEXT_MAX_SAVED_RUNS")
+        .unwrap_or_else(|_| "100".to_string())
+        .parse::<usize>()
+        .map_err(|error| format!("invalid HTML_TO_TEXT_MAX_SAVED_RUNS: {error}"))?;
+    let score_store = ScoreStore::with_retention(scores_path, max_saved_runs)?;
+    // On restart, reap metadata records above the limit before accepting traffic.
+    score_store.prune()?;
     let extractor_states = ExtractorStates::load(&states_path);
 
     let state = AppState {
@@ -81,22 +87,9 @@ async fn get_score(State(state): State<AppState>, Path(id): Path<String>) -> Res
 }
 
 async fn delete_score(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    let Ok(score) = state.score_store.load(&id) else {
-        return (StatusCode::NOT_FOUND, "Score not found").into_response();
-    };
-
     match state.score_store.delete(&id) {
-        Ok(()) => {
-            if let Some(output_dir) = score
-                .extractor_results
-                .first()
-                .and_then(|result| std::path::Path::new(&result.output_file).parent())
-            {
-                let _ = std::fs::remove_dir_all(output_dir);
-            }
-            "Deleted".into_response()
-        }
-        Err(_) => (StatusCode::NOT_FOUND, "Score not found").into_response(),
+        Ok(()) => "Deleted".into_response(),
+        Err(error) => (StatusCode::NOT_FOUND, error).into_response(),
     }
 }
 
@@ -156,7 +149,7 @@ async fn compare_settings(
         return (StatusCode::NOT_FOUND, "Score not found").into_response();
     };
 
-    let html = match load_score_source_html(&base_score).await {
+    let html = match load_score_source_html(&base_score, &state.score_store) {
         Ok(content) => content,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
@@ -201,7 +194,7 @@ async fn preview_settings(
         return (StatusCode::NOT_FOUND, "Score not found").into_response();
     };
 
-    let html = match load_score_source_html(&base_score).await {
+    let html = match load_score_source_html(&base_score, &state.score_store) {
         Ok(content) => content,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
@@ -244,7 +237,7 @@ async fn run_boilerplate_diff(
         return (StatusCode::NOT_FOUND, "Score not found").into_response();
     };
 
-    let html = match load_score_source_html(&base_score).await {
+    let html = match load_score_source_html(&base_score, &state.score_store) {
         Ok(content) => content,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
@@ -388,6 +381,11 @@ fn extractor_config_payload<'a>(config: &'a serde_json::Value, key: &str) -> &'a
     reason = "This exhaustive mapping is the typed configuration bridge for all independently supported extractors; individual settings remain isolated in each match arm"
 )]
 fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut ExtractorState) {
+    if let Some(timeout) = config.get("timeout_ms").and_then(serde_json::Value::as_u64) {
+        if (1..=900_000).contains(&timeout) {
+            state.config.timeout_ms = Some(timeout);
+        }
+    }
     match name {
         "html2text" => {
             if let Ok(cfg) =
@@ -547,14 +545,16 @@ async fn get_output(
         return (StatusCode::NOT_FOUND, "Score not found").into_response();
     };
 
-    let Some(result) = score
+    if !score
         .extractor_results
         .iter()
-        .find(|result| result.name == name)
-    else {
+        .any(|result| result.name == name)
+    {
         return (StatusCode::NOT_FOUND, "Output not found").into_response();
+    }
+    let Ok(output_path) = state.score_store.output_path(&id, &name) else {
+        return (StatusCode::BAD_REQUEST, "Invalid output name").into_response();
     };
-    let output_path = PathBuf::from(&result.output_file);
 
     std::fs::read_to_string(&output_path).map_or_else(
         |_| (StatusCode::NOT_FOUND, "Output not found").into_response(),
@@ -577,15 +577,13 @@ async fn fetch_html(url: &str) -> Result<String, String> {
     .map_err(|error| error.to_string())?
 }
 
-async fn load_score_source_html(score: &crate::scores::Score) -> Result<String, String> {
-    if score.source_html_file.is_empty() {
-        fetch_html(&score.url).await
-    } else {
-        match std::fs::read_to_string(&score.source_html_file) {
-            Ok(content) => Ok(content),
-            Err(_) => fetch_html(&score.url).await,
-        }
-    }
+fn load_score_source_html(
+    score: &crate::scores::Score,
+    repository: &ScoreStore,
+) -> Result<String, String> {
+    let path = repository.source_path(&score.id)?;
+    std::fs::read_to_string(path)
+        .map_err(|error| format!("saved HTML for run {} is unavailable: {error}", score.id))
 }
 
 #[derive(serde::Deserialize)]
