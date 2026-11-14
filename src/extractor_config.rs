@@ -34,12 +34,7 @@ impl Default for TurndownConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "These independently configurable flags map directly to the PercollateConfig extractor settings exposed through serde"
-)]
 pub struct PercollateConfig {
-    pub inline_images: bool,
     pub hyphenate: bool,
     pub fences: bool,
     pub fence: String,
@@ -52,7 +47,6 @@ pub struct PercollateConfig {
 impl Default for PercollateConfig {
     fn default() -> Self {
         Self {
-            inline_images: false,
             hyphenate: true,
             fences: true,
             fence: "`".repeat(3),
@@ -79,7 +73,6 @@ pub struct MdreamConfig {
     pub origin: String,
     pub clean_fragments: bool,
     pub clean_empty_links: bool,
-    pub clean_blank_lines: bool,
     pub clean_redundant_links: bool,
     pub clean_self_link_headings: bool,
     pub clean_empty_images: bool,
@@ -102,7 +95,6 @@ impl Default for MdreamConfig {
             origin: String::new(),
             clean_fragments: false,
             clean_empty_links: false,
-            clean_blank_lines: false,
             clean_redundant_links: false,
             clean_self_link_headings: false,
             clean_empty_images: false,
@@ -238,28 +230,6 @@ impl Default for MarkdownifyConfig {
             strip_document: "STRIP".to_string(),
             strip_pre: "STRIP".to_string(),
             bs4_parser: String::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LightpandaConfig {
-    pub strip_js: bool,
-    pub strip_css: bool,
-    pub strip_ui: bool,
-    pub wait_until: String,
-    pub wait_ms: u64,
-}
-
-impl Default for LightpandaConfig {
-    fn default() -> Self {
-        Self {
-            strip_js: true,
-            strip_css: true,
-            strip_ui: false,
-            wait_until: "done".to_string(),
-            wait_ms: 5000,
         }
     }
 }
@@ -411,50 +381,32 @@ pub const DEFAULT_SKIP_TAGS: &[&str] = &[
 pub struct MdkaConfig {
     pub mode: String,
     pub preserve_ids: Option<bool>,
-    pub preserve_classes: Option<bool>,
-    pub preserve_data_attrs: Option<bool>,
-    pub preserve_aria_attrs: Option<bool>,
-    pub preserve_unknown_attrs: Option<bool>,
-    pub drop_presentation_attrs: Option<bool>,
     pub drop_interactive_shell: Option<bool>,
-    pub unwrap_unknown_wrappers: Option<bool>,
+    pub emphasis_from_style: Option<bool>,
+    pub backslash_hard_breaks: Option<bool>,
 }
 
 impl MdkaConfig {
-    pub fn into_conversion_options(self) -> mdka::options::ConversionOptions {
-        let mode = match self.mode.as_str() {
-            "strict" => mdka::options::ConversionMode::Strict,
-            "minimal" => mdka::options::ConversionMode::Minimal,
-            "semantic" => mdka::options::ConversionMode::Semantic,
-            "preserve" => mdka::options::ConversionMode::Preserve,
-            _ => mdka::options::ConversionMode::Balanced,
+    pub fn into_conversion_options(self) -> Result<mdka::options::ConversionOptions, String> {
+        let mode: mdka::options::ConversionMode = if self.mode.is_empty() {
+            mdka::options::ConversionMode::Balanced
+        } else {
+            self.mode.parse()?
         };
         let mut options = mdka::options::ConversionOptions::for_mode(mode);
-        if let Some(v) = self.preserve_ids {
-            options.preserve_ids = v;
+        if let Some(value) = self.preserve_ids {
+            options.preserve_ids = value;
         }
-        if let Some(v) = self.preserve_classes {
-            options.preserve_classes = v;
+        if let Some(value) = self.drop_interactive_shell {
+            options.drop_interactive_shell = value;
         }
-        if let Some(v) = self.preserve_data_attrs {
-            options.preserve_data_attrs = v;
+        if let Some(value) = self.emphasis_from_style {
+            options.emphasis_from_style = value;
         }
-        if let Some(v) = self.preserve_aria_attrs {
-            options.preserve_aria_attrs = v;
+        if let Some(value) = self.backslash_hard_breaks {
+            options.backslash_hard_breaks = value;
         }
-        if let Some(v) = self.preserve_unknown_attrs {
-            options.preserve_unknown_attrs = v;
-        }
-        if let Some(v) = self.drop_presentation_attrs {
-            options.drop_presentation_attrs = v;
-        }
-        if let Some(v) = self.drop_interactive_shell {
-            options.drop_interactive_shell = v;
-        }
-        if let Some(v) = self.unwrap_unknown_wrappers {
-            options.unwrap_unknown_wrappers = v;
-        }
-        options
+        Ok(options)
     }
 }
 
@@ -556,7 +508,6 @@ pub struct ExtractorConfig {
     pub trafilatura: TrafilaturaConfig,
     pub html2text_py: Html2TextPythonConfig,
     pub markdownify: MarkdownifyConfig,
-    pub lightpanda: LightpandaConfig,
     pub webclaw: WebclawConfig,
     pub e2m: E2mConfig,
     pub html_to_markdown_go: HtmlToMarkdownGoConfig,
@@ -571,7 +522,7 @@ pub struct ExtractorState {
 pub fn default_timeout_ms(name: &str) -> u64 {
     match name {
         "e2m" => 120_000,
-        "lightpanda" | "webclaw" => 60_000,
+        "webclaw" => 60_000,
         "percollate" | "trafilatura" | "markdownify" | "html2text-py" => 45_000,
         "turndown" | "html-to-markdown-go" => 30_000,
         _ => 10_000,
@@ -610,10 +561,12 @@ impl ExtractorStates {
                 if let Ok(loaded) = serde_json::from_str::<Self>(&s) {
                     let mut merged = defaults;
                     for (name, mut state) in loaded.states {
-                        if state.config.timeout_ms.is_none() {
-                            state.config.timeout_ms = Some(default_timeout_ms(&name));
+                        if let Some(current) = merged.states.get_mut(&name) {
+                            if state.config.timeout_ms.is_none() {
+                                state.config.timeout_ms = Some(default_timeout_ms(&name));
+                            }
+                            *current = state;
                         }
-                        merged.states.insert(name, state);
                     }
                     merged
                 } else {
@@ -648,9 +601,9 @@ impl Default for ExtractorStates {
             "html2text",
             "html2text-py",
             "markdownify",
+            "mozilla-readability",
             "html-to-markdown-go",
             "htmd",
-            "lightpanda",
             "llm_readability",
             "mdka",
             "mdream",
@@ -758,10 +711,6 @@ impl Default for ExtractorStates {
                     markdownify: MarkdownifyConfig::default(),
                     ..Default::default()
                 },
-                "lightpanda" => ExtractorConfig {
-                    lightpanda: LightpandaConfig::default(),
-                    ..Default::default()
-                },
                 "webclaw" => ExtractorConfig {
                     webclaw: WebclawConfig::default(),
                     ..Default::default()
@@ -812,45 +761,41 @@ mod tests {
     }
 
     #[test]
-    fn mdka_config_preserves_mode_defaults_when_optional_flags_are_unset() {
+    fn mdka_config_preserves_mode_defaults_when_optional_flags_are_unset() -> Result<(), String> {
         let options = MdkaConfig {
             mode: "minimal".to_string(),
             ..Default::default()
         }
-        .into_conversion_options();
+        .into_conversion_options()?;
 
         assert!(!options.preserve_ids);
-        assert!(!options.preserve_classes);
-        assert!(!options.preserve_data_attrs);
-        assert!(!options.preserve_aria_attrs);
-        assert!(!options.preserve_unknown_attrs);
-        assert!(options.drop_presentation_attrs);
         assert!(options.drop_interactive_shell);
-        assert!(options.unwrap_unknown_wrappers);
+        assert!(!options.emphasis_from_style);
+        assert!(!options.backslash_hard_breaks);
+        Ok(())
     }
 
     #[test]
-    fn mdka_config_applies_optional_overrides() {
+    fn mdka_config_applies_optional_overrides() -> Result<(), String> {
         let options = MdkaConfig {
             mode: "balanced".to_string(),
             preserve_ids: Some(false),
-            preserve_classes: Some(true),
-            preserve_data_attrs: Some(true),
-            preserve_aria_attrs: Some(false),
-            preserve_unknown_attrs: Some(true),
-            drop_presentation_attrs: Some(false),
             drop_interactive_shell: Some(true),
-            unwrap_unknown_wrappers: Some(true),
+            emphasis_from_style: Some(true),
+            backslash_hard_breaks: Some(true),
         }
-        .into_conversion_options();
+        .into_conversion_options()?;
 
         assert!(!options.preserve_ids);
-        assert!(options.preserve_classes);
-        assert!(options.preserve_data_attrs);
-        assert!(!options.preserve_aria_attrs);
-        assert!(options.preserve_unknown_attrs);
-        assert!(!options.drop_presentation_attrs);
         assert!(options.drop_interactive_shell);
-        assert!(options.unwrap_unknown_wrappers);
+        assert!(options.emphasis_from_style);
+        assert!(options.backslash_hard_breaks);
+        assert!(MdkaConfig {
+            mode: "strict".to_string(),
+            ..Default::default()
+        }
+        .into_conversion_options()
+        .is_err());
+        Ok(())
     }
 }

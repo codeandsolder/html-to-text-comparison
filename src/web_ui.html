@@ -529,6 +529,8 @@
                     <p>Compare extractor outputs side by side, pin a baseline on the left, grade with the keyboard, and run single-extractor variants without disturbing the main benchmark set.</p>
                     <div class="url-row">
                         <input type="text" id="urlInput" placeholder="Enter URL to fetch and extract..." style="flex: 1 1 460px;">
+                        <label for="acquisitionMode">Acquire with</label>
+                        <select id="acquisitionMode"><option value="http">HTTP snapshot</option><option value="lightpanda">Lightpanda rendered HTML</option></select>
                         <button id="runBtn" onclick="runExtraction()">Run All Enabled</button>
                     </div>
                     <div id="status" class="status"></div>
@@ -620,7 +622,7 @@
             throw new Error('Failed to load diff library: expected window.Diff from jsdiff');
         }
 
-        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','e2m','fast_html2md','html2md','html2md-rs','html2text','html2text-py','html-to-markdown-go','htmd','lightpanda','llm_readability','markdownify','mdka','mdream','nanohtml2text','percollate','readability','readable-readability','trafilatura','turndown','webclaw'];
+        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','e2m','fast_html2md','html2md','html2md-rs','html2text','html2text-py','html-to-markdown-go','htmd','llm_readability','markdownify','mdka','mdream','mozilla-readability','nanohtml2text','percollate','readability','readable-readability','trafilatura','turndown','webclaw'];
         const CONFIG_FIELDS = {
             html2text: [
                 {name:'max_wrap_width',type:'number'},{name:'min_wrap_width',type:'number'},
@@ -644,11 +646,11 @@
             ],
             'html2md-rs': [{name:'ignore_tags',type:'text'}],
             mdka: [
-                {name:'mode',type:'select',options:['balanced','strict','minimal','semantic','preserve']},
-                {name:'preserve_ids',type:'checkbox'},{name:'preserve_classes',type:'checkbox'},
-                {name:'preserve_data_attrs',type:'checkbox'},{name:'preserve_aria_attrs',type:'checkbox'},
-                {name:'preserve_unknown_attrs',type:'checkbox'},{name:'drop_presentation_attrs',type:'checkbox'},
-                {name:'drop_interactive_shell',type:'checkbox'},{name:'unwrap_unknown_wrappers',type:'checkbox'}
+                {name:'mode',type:'select',options:['balanced','minimal']},
+                {name:'preserve_ids',type:'checkbox'},
+                {name:'drop_interactive_shell',type:'checkbox'},
+                {name:'emphasis_from_style',type:'checkbox'},
+                {name:'backslash_hard_breaks',type:'checkbox'}
             ],
             'readable-readability': [
                 {name:'strip_unlikelys',type:'checkbox'},{name:'weight_classes',type:'checkbox'},
@@ -673,7 +675,7 @@
                 {name:'preformatted_code',type:'checkbox'},
             ],
             percollate: [
-                {name:'inline_images',type:'checkbox'},{name:'hyphenate',type:'checkbox'},{name:'fences',type:'checkbox'},
+                {name:'hyphenate',type:'checkbox'},{name:'fences',type:'checkbox'},
                 {name:'fence',type:'select',options:['`','~']},{name:'emphasis',type:'select',options:['_','*']},
                 {name:'strong',type:'select',options:['_','*']},{name:'resource_link',type:'checkbox'},
                 {name:'rule',type:'select',options:['-','*','_']}
@@ -682,7 +684,7 @@
                 {name:'minimal',type:'checkbox'},{name:'isolate_main',type:'checkbox'},
                 {name:'frontmatter',type:'checkbox'},{name:'clean_urls',type:'checkbox'},{name:'tailwind',type:'checkbox'},
                 {name:'origin',type:'text'},{name:'clean_fragments',type:'checkbox'},
-                {name:'clean_empty_links',type:'checkbox'},{name:'clean_blank_lines',type:'checkbox'},
+                {name:'clean_empty_links',type:'checkbox'},
                 {name:'clean_redundant_links',type:'checkbox'},{name:'clean_self_link_headings',type:'checkbox'},
                 {name:'clean_empty_images',type:'checkbox'},{name:'clean_empty_link_text',type:'checkbox'},
                 {name:'filter_include',type:'text'},{name:'filter_exclude',type:'text'},
@@ -718,10 +720,6 @@
                 {name:'strip_pre',type:'select',options:['STRIP','STRIP_ONE','']},
                 {name:'bs4_parser',type:'select',options:['','html.parser','lxml','html5lib']},
             ],
-            lightpanda: [
-                {name:'wait_until',type:'select',options:['load','domcontentloaded','networkidle','done']},
-                {name:'wait_ms',type:'number'},
-            ],
             webclaw: [
                 {name:'only_main_content',type:'checkbox'},
                 {name:'include_css',type:'text'},{name:'exclude_css',type:'text'},
@@ -742,21 +740,16 @@
             html2text: {max_wrap_width:'html2text',min_wrap_width:'html2text',raw_mode:'html2text',no_link_wrapping:'html2text',link_footnotes:'html2text',no_table_borders:'html2text',unicode_strikeout:'html2text',decorate:'html2text',pad_block_width:'html2text',allow_width_overflow:'html2text'},
             htmd: {skip_tags:'htmd',heading_style:'htmd',hr_style:'htmd',br_style:'htmd',link_style:'htmd',link_reference_style:'htmd',code_block_style:'htmd',code_block_fence:'htmd',bullet_list_marker:'htmd',ul_bullet_spacing:'htmd',ol_number_spacing:'htmd',preformatted_code:'htmd',translation_mode:'htmd'},
             'html2md-rs': {ignore_tags:'html2md_rs'},
-            mdka: {
-                mode:'mdka',preserve_ids:'mdka',preserve_classes:'mdka',preserve_data_attrs:'mdka',
-                preserve_aria_attrs:'mdka',preserve_unknown_attrs:'mdka',drop_presentation_attrs:'mdka',
-                drop_interactive_shell:'mdka',unwrap_unknown_wrappers:'mdka'
-            },
+            mdka: {mode:'mdka',preserve_ids:'mdka',drop_interactive_shell:'mdka',emphasis_from_style:'mdka',backslash_hard_breaks:'mdka'},
             'readable-readability': {strip_unlikelys:'readable_readability',weight_classes:'readable_readability',clean_conditionally:'readable_readability',clean_attributes:'readable_readability'},
             dom_smoothie: {max_elements_to_parse:'dom_smoothie',text_mode:'dom_smoothie',n_top_candidates:'dom_smoothie',char_threshold:'dom_smoothie',min_score_to_adjust:'dom_smoothie',candidate_select_mode:'dom_smoothie'},
             august: {max_width:'augus_max_width'},
             turndown: {heading_style:'turndown',hr:'turndown',bullet_list_marker:'turndown',code_block_style:'turndown',fence:'turndown',em_delimiter:'turndown',strong_delimiter:'turndown',link_style:'turndown',link_reference_style:'turndown',preformatted_code:'turndown'},
-            percollate: {inline_images:'percollate',hyphenate:'percollate',fences:'percollate',fence:'percollate',emphasis:'percollate',strong:'percollate',resource_link:'percollate',rule:'percollate'},
-            mdream: {minimal:'mdream',isolate_main:'mdream',frontmatter:'mdream',clean_urls:'mdream',tailwind:'mdream',origin:'mdream',clean_fragments:'mdream',clean_empty_links:'mdream',clean_blank_lines:'mdream',clean_redundant_links:'mdream',clean_self_link_headings:'mdream',clean_empty_images:'mdream',clean_empty_link_text:'mdream',filter_include:'mdream',filter_exclude:'mdream',filter_process_children:'mdream',frontmatter_meta_fields:'mdream',extraction_selectors:'mdream'},
+            percollate: {hyphenate:'percollate',fences:'percollate',fence:'percollate',emphasis:'percollate',strong:'percollate',resource_link:'percollate',rule:'percollate'},
+            mdream: {minimal:'mdream',isolate_main:'mdream',frontmatter:'mdream',clean_urls:'mdream',tailwind:'mdream',origin:'mdream',clean_fragments:'mdream',clean_empty_links:'mdream',clean_redundant_links:'mdream',clean_self_link_headings:'mdream',clean_empty_images:'mdream',clean_empty_link_text:'mdream',filter_include:'mdream',filter_exclude:'mdream',filter_process_children:'mdream',frontmatter_meta_fields:'mdream',extraction_selectors:'mdream'},
             trafilatura: {favor_precision:'trafilatura',favor_recall:'trafilatura',include_comments:'trafilatura',include_tables:'trafilatura',include_images:'trafilatura',include_formatting:'trafilatura',include_links:'trafilatura',deduplicate:'trafilatura',with_metadata:'trafilatura'},
             html2text_py: {ignore_links:'html2text_py',ignore_images:'html2text_py',ignore_emphasis:'html2text_py',body_width:'html2text_py',unicode_snob:'html2text_py',escape_snob:'html2text_py',inline_links:'html2text_py',google_doc:'html2text_py',dash_unordered_list:'html2text_py'},
             markdownify: {strip:'markdownify',convert:'markdownify',autolinks:'markdownify',default_title:'markdownify',heading_style:'markdownify',bullets:'markdownify',strong_em_symbol:'markdownify',sub_symbol:'markdownify',sup_symbol:'markdownify',newline_style:'markdownify',code_language:'markdownify',escape_asterisks:'markdownify',escape_underscores:'markdownify',escape_misc:'markdownify',keep_inline_images_in:'markdownify',table_infer_header:'markdownify',wrap:'markdownify',wrap_width:'markdownify',strip_document:'markdownify',strip_pre:'markdownify',bs4_parser:'markdownify'},
-            lightpanda: {wait_until:'lightpanda',wait_ms:'lightpanda'},
             webclaw: {only_main_content:'webclaw',include_css:'webclaw',exclude_css:'webclaw',format:'webclaw'},
             e2m: {engine:'e2m',langs:'e2m',skip_headers_and_footers:'e2m',include_image_link_in_text:'e2m'},
             'html-to-markdown-go': {domain:'html_to_markdown_go',plugins:'html_to_markdown_go',include_selector:'html_to_markdown_go',exclude_selector:'html_to_markdown_go'},
@@ -821,62 +814,15 @@
         }
 
         const MDKA_MODE_DEFAULTS = {
-            balanced: {
-                preserve_ids: true,
-                preserve_classes: false,
-                preserve_data_attrs: false,
-                preserve_aria_attrs: true,
-                preserve_unknown_attrs: false,
-                drop_presentation_attrs: true,
-                drop_interactive_shell: false,
-                unwrap_unknown_wrappers: false,
-            },
-            strict: {
-                preserve_ids: true,
-                preserve_classes: true,
-                preserve_data_attrs: true,
-                preserve_aria_attrs: true,
-                preserve_unknown_attrs: true,
-                drop_presentation_attrs: false,
-                drop_interactive_shell: false,
-                unwrap_unknown_wrappers: false,
-            },
-            minimal: {
-                preserve_ids: false,
-                preserve_classes: false,
-                preserve_data_attrs: false,
-                preserve_aria_attrs: false,
-                preserve_unknown_attrs: false,
-                drop_presentation_attrs: true,
-                drop_interactive_shell: true,
-                unwrap_unknown_wrappers: true,
-            },
-            semantic: {
-                preserve_ids: true,
-                preserve_classes: false,
-                preserve_data_attrs: false,
-                preserve_aria_attrs: true,
-                preserve_unknown_attrs: false,
-                drop_presentation_attrs: true,
-                drop_interactive_shell: false,
-                unwrap_unknown_wrappers: true,
-            },
-            preserve: {
-                preserve_ids: true,
-                preserve_classes: true,
-                preserve_data_attrs: true,
-                preserve_aria_attrs: true,
-                preserve_unknown_attrs: true,
-                drop_presentation_attrs: false,
-                drop_interactive_shell: false,
-                unwrap_unknown_wrappers: false,
-            },
+            balanced: { preserve_ids:true, drop_interactive_shell:false,
+                emphasis_from_style:false, backslash_hard_breaks:false },
+            minimal: { preserve_ids:false, drop_interactive_shell:true,
+                emphasis_from_style:false, backslash_hard_breaks:false }
         };
 
         function getMdkaDefaultField(field) {
             const cfg = states.states?.mdka?.config?.mdka || {};
-            const mode = cfg.mode || 'balanced';
-            return MDKA_MODE_DEFAULTS[mode]?.[field];
+            return MDKA_MODE_DEFAULTS[cfg.mode || 'balanced']?.[field];
         }
 
         function getConfigField(name, field) {
@@ -929,7 +875,6 @@
             if (name === 'trafilatura') return structuredClone(cfg.trafilatura || {});
             if (name === 'html2text-py') return structuredClone(cfg.html2text_py || {});
             if (name === 'markdownify') return structuredClone(cfg.markdownify || {});
-            if (name === 'lightpanda') return structuredClone(cfg.lightpanda || {});
             if (name === 'webclaw') return structuredClone(cfg.webclaw || {});
             if (name === 'e2m') return structuredClone(cfg.e2m || {});
             if (name === 'html-to-markdown-go') return structuredClone(cfg.html_to_markdown_go || {});
@@ -1191,7 +1136,7 @@
                 const res = await fetch('/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url })
+                    body: JSON.stringify({ url, acquisition: document.getElementById('acquisitionMode').value })
                 });
                 if (!res.ok) throw new Error(await res.text());
                 const score = await res.json();

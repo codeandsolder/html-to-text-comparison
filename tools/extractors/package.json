@@ -5,6 +5,8 @@
   "version": "0.1.0",
   "dependencies": {
     "percollate": "4.3.0",
-    "turndown": "7.2.5"
+    "turndown": "7.2.5",
+    "@mozilla/readability": "0.6.0",
+    "linkedom": "0.18.15"
   }
 }
