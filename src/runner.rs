@@ -55,29 +55,26 @@ impl Runner {
     // Runs only inside the isolated worker, or in a focused in-process unit test.
     // A caller requiring a deadline must use run_isolated: Rust threads cannot
     // be forcibly cancelled, so a receive timeout must not masquerade as one.
-    pub fn run(&mut self, name: impl Into<String>, extractor: impl FnOnce(&str) -> String) {
+    pub fn run(
+        &mut self,
+        name: impl Into<String>,
+        extractor: impl FnOnce(&str) -> Result<String, String>,
+    ) {
         let name = name.into();
         let output_file = self.out_dir.join(format!("{name}.txt"));
         let started = Instant::now();
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| extractor(&self.html)));
         let elapsed = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let (output, status, error) = match result {
-            Ok(output) => {
-                let (status, error) = output.strip_prefix("[ERROR]").map_or_else(
-                    || {
-                        if output.is_empty() {
-                            (
-                                ExtractionStatus::NoContent,
-                                "extractor returned empty content".to_string(),
-                            )
-                        } else {
-                            (ExtractionStatus::Success, String::new())
-                        }
-                    },
-                    |message| (ExtractionStatus::Failed, message.trim().to_string()),
-                );
-                (output, status, error)
+            Ok(Ok(output)) if !output.is_empty() => {
+                (output, ExtractionStatus::Success, String::new())
             }
+            Ok(Ok(_)) => (
+                String::new(),
+                ExtractionStatus::NoContent,
+                "extractor returned empty content".to_string(),
+            ),
+            Ok(Err(error)) => (String::new(), ExtractionStatus::Failed, error),
             Err(payload) => {
                 let error = payload.downcast_ref::<&str>().map_or_else(
                     || {
@@ -216,7 +213,7 @@ mod tests {
     use super::Runner;
 
     #[test]
-    fn extractor_diagnostics_are_not_counted_as_content() -> Result<(), Box<dyn std::error::Error>>
+    fn typed_extractor_outcomes_preserve_legitimate_text() -> Result<(), Box<dyn std::error::Error>>
     {
         use super::ExtractionStatus;
 
@@ -225,9 +222,12 @@ mod tests {
         std::fs::create_dir_all(&out_dir)?;
         let mut runner = Runner::new(out_dir.clone(), "<p>Hello</p>".to_string());
 
-        runner.run("success", |_| "Converted".to_string());
-        runner.run("failed", |_| "[ERROR] tool missing".to_string());
-        runner.run("empty", |_| String::new());
+        runner.run("success", |_| Ok("Converted".to_string()));
+        runner.run("failed", |_| Err("tool missing".to_string()));
+        runner.run("empty", |_| Ok(String::new()));
+        runner.run("prefix", |_| {
+            Ok("[ERROR] legitimate document text".to_string())
+        });
 
         let stats = runner.into_stats();
         assert_eq!(stats[0].status, ExtractionStatus::Success);
@@ -237,6 +237,11 @@ mod tests {
         assert_eq!(stats[1].error, "tool missing");
         assert_eq!(stats[2].status, ExtractionStatus::NoContent);
         assert_eq!(stats[2].output_size, 0);
+        assert_eq!(stats[3].status, ExtractionStatus::Success);
+        assert_eq!(
+            stats[3].output_size,
+            "[ERROR] legitimate document text".len()
+        );
         assert_eq!(
             std::fs::read_to_string(out_dir.join("failed.txt"))?,
             "[ERROR] tool missing\n"

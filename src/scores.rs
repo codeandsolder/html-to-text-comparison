@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, read_to_string};
-use std::io::Read;
+use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ pub struct ExtractorResult {
     #[serde(default)]
     pub extractor_key: String,
     pub output_size: usize,
-    pub reduction_percent: f64,
+    pub reduction_percent: Option<f64>,
     pub time_micros: u64,
     pub status: ExtractionStatus,
     pub error: String,
@@ -45,7 +45,7 @@ pub struct ExtractorPreview {
     pub extractor_key: String,
     pub output: String,
     pub output_size: usize,
-    pub reduction_percent: f64,
+    pub reduction_percent: Option<f64>,
     pub time_micros: u64,
     pub status: ExtractionStatus,
     pub error: String,
@@ -77,11 +77,10 @@ impl Score {
                 name: stat.name.clone(),
                 extractor_key: stat.name.clone(),
                 output_size: stat.output_size,
-                reduction_percent: if stat.status.is_success() {
-                    crate::metrics::reduction_percent(stat.output_size, html_size)
-                } else {
-                    0.0
-                },
+                reduction_percent: stat
+                    .status
+                    .is_success()
+                    .then(|| crate::metrics::reduction_percent(stat.output_size, html_size)),
                 time_micros: stat.time_micros,
                 status: stat.status,
                 error: stat.error.clone(),
@@ -130,10 +129,9 @@ pub fn run_named_extractor(
             let parsed_url = parsed_url.clone();
             runner.run(output_name, move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
-                readability::extractor::extract(&mut html, &parsed_url).map_or_else(
-                    |error| format!("[ERROR] readability failed: {error:?}"),
-                    |result| result.text,
-                )
+                readability::extractor::extract(&mut html, &parsed_url)
+                    .map(|result| result.text)
+                    .map_err(|error| format!("readability failed: {error:?}"))
             });
         }
         #[cfg(feature = "llm_readability")]
@@ -141,10 +139,9 @@ pub fn run_named_extractor(
             let parsed_url = parsed_url.clone();
             runner.run(output_name, move |html| {
                 let mut html = std::io::Cursor::new(html.as_bytes());
-                llm_readability::extractor::extract(&mut html, &parsed_url).map_or_else(
-                    |error| format!("[ERROR] llm_readability failed: {error:?}"),
-                    |result| result.text,
-                )
+                llm_readability::extractor::extract(&mut html, &parsed_url)
+                    .map(|result| result.text)
+                    .map_err(|error| format!("llm_readability failed: {error:?}"))
             });
         }
         #[cfg(feature = "html2text")]
@@ -181,7 +178,7 @@ pub fn run_named_extractor(
                 render = render.unicode_strikeout(cfg.unicode_strikeout);
                 render
                     .string_from_read(&mut html, width)
-                    .unwrap_or_default()
+                    .map_err(|error| format!("html2text failed: {error}"))
             });
         }
         #[cfg(feature = "htmd")]
@@ -248,7 +245,10 @@ pub fn run_named_extractor(
                     builder = builder
                         .skip_tags(skip_tags.iter().map(std::string::String::as_str).collect());
                 }
-                builder.build().convert(html).unwrap_or_default()
+                builder
+                    .build()
+                    .convert(html)
+                    .map_err(|error| format!("htmd failed: {error}"))
             });
         }
         #[cfg(feature = "html2md-rs")]
@@ -278,12 +278,12 @@ pub fn run_named_extractor(
                             .collect(),
                     },
                 )
-                .unwrap_or_default()
+                .map_err(|error| format!("html2md-rs failed: {error}"))
             });
         }
         #[cfg(feature = "nanohtml2text")]
         "nanohtml2text" => {
-            runner.run(output_name, nanohtml2text::html2text);
+            runner.run(output_name, |html| Ok(nanohtml2text::html2text(html)));
         }
         #[cfg(feature = "mdka")]
         "mdka" => {
@@ -292,7 +292,10 @@ pub fn run_named_extractor(
                 .get("mdka")
                 .map_or_default(|s| s.config.mdka.clone());
             runner.run(output_name, move |html| {
-                mdka::html_to_markdown_with(html, &cfg.into_conversion_options())
+                Ok(mdka::html_to_markdown_with(
+                    html,
+                    &cfg.into_conversion_options(),
+                ))
             });
         }
         #[cfg(feature = "readable-readability")]
@@ -308,7 +311,7 @@ pub fn run_named_extractor(
                 parser.clean_conditionally(cfg.clean_conditionally);
                 parser.clean_attributes(cfg.clean_attributes);
                 let (node, _) = parser.parse(html);
-                node.text_contents()
+                Ok(node.text_contents())
             });
         }
         #[cfg(feature = "dom_smoothie")]
@@ -319,19 +322,19 @@ pub fn run_named_extractor(
                 .map_or_default(|s| s.config.dom_smoothie.clone());
             runner.run(output_name, move |html| {
                 let dom_cfg = cfg;
-                match dom_smoothie::Readability::new(html, None, Some(dom_cfg.into_config())) {
-                    Ok(mut parser) => match parser.parse() {
-                        Ok(result) => result.text_content.to_string(),
-                        Err(error) => format!("[ERROR] dom_smoothie parse failed: {error:?}"),
-                    },
-                    Err(error) => format!("[ERROR] dom_smoothie setup failed: {error:?}"),
-                }
+                let mut parser =
+                    dom_smoothie::Readability::new(html, None, Some(dom_cfg.into_config()))
+                        .map_err(|error| format!("dom_smoothie setup failed: {error:?}"))?;
+                parser
+                    .parse()
+                    .map(|result| result.text_content.to_string())
+                    .map_err(|error| format!("dom_smoothie parse failed: {error:?}"))
             });
         }
         #[cfg(feature = "boilerpipe")]
         "boilerpipe" => {
             runner.run(output_name, |html| {
-                boilerpipe::parse_document(html).content().to_string()
+                Ok(boilerpipe::parse_document(html).content().to_string())
             });
         }
         #[cfg(feature = "august")]
@@ -340,15 +343,17 @@ pub fn run_named_extractor(
                 .states
                 .get("august")
                 .map_or(usize::MAX, |s| s.config.augus_max_width);
-            runner.run(output_name, move |html| august::convert(html, cfg));
+            runner.run(output_name, move |html| Ok(august::convert(html, cfg)));
         }
         #[cfg(feature = "fast_html2md")]
         "fast_html2md" => {
-            runner.run(output_name, |html| fast_html2md::parse_html(html, false));
+            runner.run(output_name, |html| {
+                Ok(fast_html2md::parse_html(html, false))
+            });
         }
         #[cfg(feature = "html2md")]
         "html2md" => {
-            runner.run(output_name, html2md::parse_html);
+            runner.run(output_name, |html| Ok(html2md::parse_html(html)));
         }
         #[cfg(feature = "mdream")]
         "mdream" => {
@@ -443,7 +448,7 @@ pub fn run_named_extractor(
                     }
                     opts.plugins = Some(plugins);
                 }
-                html_to_markdown(html, opts)
+                Ok(html_to_markdown(html, opts))
             });
         }
         _ => {
@@ -500,11 +505,10 @@ pub fn compare_single_extractor_settings(
             name: stat.name.clone(),
             extractor_key: extractor.to_string(),
             output_size: stat.output_size,
-            reduction_percent: if stat.status.is_success() {
-                crate::metrics::reduction_percent(stat.output_size, html_size)
-            } else {
-                0.0
-            },
+            reduction_percent: stat
+                .status
+                .is_success()
+                .then(|| crate::metrics::reduction_percent(stat.output_size, html_size)),
             time_micros: stat.time_micros,
             status: stat.status,
             error: stat.error,
@@ -558,11 +562,10 @@ pub fn preview_single_extractor_settings(
         name: format!("{extractor} current settings"),
         extractor_key: extractor.to_string(),
         output_size: stat.output_size,
-        reduction_percent: if stat.status.is_success() {
-            crate::metrics::reduction_percent(stat.output_size, html_size)
-        } else {
-            0.0
-        },
+        reduction_percent: stat
+            .status
+            .is_success()
+            .then(|| crate::metrics::reduction_percent(stat.output_size, html_size)),
         time_micros: stat.time_micros,
         status: stat.status,
         error: stat.error,
@@ -607,7 +610,7 @@ pub fn run_cli_extractor(
     html: &str,
     states: &ExtractorStates,
     parsed_url: &url::Url,
-) -> String {
+) -> Result<String, String> {
     match extractor_key {
         "turndown" => run_turndown(
             html,
@@ -665,26 +668,21 @@ pub fn run_cli_extractor(
                 .map_or_default(|s| s.config.html_to_markdown_go.clone()),
         ),
         #[cfg(feature = "reader-lm-api")]
-        "reader-lm-api" => match std::env::var("JINA_API_KEY") {
-            Ok(key) => match ureq::get(&format!("https://r.jina.ai/{parsed_url}"))
+        "reader-lm-api" => {
+            let key = std::env::var("JINA_API_KEY")
+                .map_err(|error| format!("reader-lm-api missing API key: {error}"))?;
+            let response = ureq::get(&format!("https://r.jina.ai/{parsed_url}"))
                 .set("authorization", &format!("Bearer {key}"))
                 .call()
-            {
-                Ok(response) => {
-                    let mut body = String::new();
-                    response
-                        .into_reader()
-                        .read_to_string(&mut body)
-                        .map_or_else(
-                            |error| format!("[ERROR] reader-lm-api read failed: {error}"),
-                            |_| body,
-                        )
-                }
-                Err(error) => format!("[ERROR] reader-lm-api request failed: {error}"),
-            },
-            Err(error) => format!("[ERROR] reader-lm-api missing API key: {error}"),
-        },
-        _ => format!("[ERROR] unknown extractor: {extractor_key}"),
+                .map_err(|error| format!("reader-lm-api request failed: {error}"))?;
+            let mut body = String::new();
+            response
+                .into_reader()
+                .read_to_string(&mut body)
+                .map_err(|error| format!("reader-lm-api read failed: {error}"))?;
+            Ok(body)
+        }
+        _ => Err(format!("unknown extractor: {extractor_key}")),
     }
 }
 
@@ -696,9 +694,36 @@ fn extractor_node_modules() -> PathBuf {
     )
 }
 
-fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> String {
+fn command_output_text(
+    output: std::io::Result<std::process::Output>,
+    tool: &str,
+) -> Result<String, String> {
+    let output = output.map_err(|error| format!("{tool} launch failed: {error}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Err(format!(
+            "{tool} exited {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    if !stderr.trim().is_empty() {
+        eprintln!("[{tool}] {}", stderr.trim());
+    }
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if text.is_empty() {
+        return Err(format!(
+            "{tool} returned empty output. stderr: {}",
+            stderr.trim()
+        ));
+    }
+    Ok(text)
+}
+
+fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("turndown_{}.html", uuid::Uuid::new_v4()));
-    let _ = std::fs::write(&tmp, html);
+    std::fs::write(&tmp, html)
+        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let options = serde_json::json!({
         "headingStyle": cfg.heading_style,
         "hr": cfg.hr,
@@ -723,28 +748,7 @@ fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> Strin
         .output();
 
     let _ = std::fs::remove_file(&tmp);
-    match out {
-        Ok(o) => {
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] turndown failed (exit {}): {}\n",
-                    o.status,
-                    stderr.trim()
-                );
-            }
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            if stdout.is_empty() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] turndown returned empty output. stderr: {}\n",
-                    stderr.trim()
-                );
-            }
-            stdout.to_string()
-        }
-        Err(e) => format!("[ERROR] node failed: {e}\n"),
-    }
+    command_output_text(out, "turndown")
 }
 
 fn normalize_percollate_marker(value: &str, allowed: &[char]) -> Option<char> {
@@ -806,44 +810,23 @@ fn build_percollate_args(input_path: &std::path::Path, cfg: &PercollateConfig) -
     args
 }
 
-fn run_percollate(html: &str, cfg: &PercollateConfig) -> String {
+fn run_percollate(html: &str, cfg: &PercollateConfig) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("percollate_in_{}.html", uuid::Uuid::new_v4()));
-    let _ = std::fs::write(&tmp, html);
+    std::fs::write(&tmp, html)
+        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let args = build_percollate_args(&tmp, cfg);
     let out = std::process::Command::new("node").args(&args).output();
 
     let _ = std::fs::remove_file(&tmp);
-    match out {
-        Ok(o) => {
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] percollate failed (exit {}): {}\n",
-                    o.status,
-                    stderr.trim()
-                );
-            }
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            if stdout.is_empty() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] percollate returned empty output. stderr: {}\n",
-                    stderr.trim()
-                );
-            }
-            stdout.to_string()
-        }
-        Err(e) => format!("[ERROR] percollate failed: {e}\n"),
-    }
+    command_output_text(out, "percollate")
 }
 
-fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> String {
+fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("trafilatura_{}.html", uuid::Uuid::new_v4()));
-    let _ = std::fs::write(&tmp, html);
-    let cfg_json = match serde_json::to_string(cfg) {
-        Ok(json) => json,
-        Err(error) => return format!("[ERROR] serializing configuration failed: {error}"),
-    };
+    std::fs::write(&tmp, html)
+        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
+    let cfg_json = serde_json::to_string(cfg)
+        .map_err(|error| format!("serializing configuration: {error}"))?;
     let script = r"import json, sys, trafilatura; cfg = json.loads(sys.argv[2]); html = open(sys.argv[1]).read(); result = trafilatura.extract(html, output_format='markdown', favor_precision=cfg['favor_precision'], favor_recall=cfg['favor_recall'], include_comments=cfg['include_comments'], include_tables=cfg['include_tables'], include_images=cfg['include_images'], include_formatting=cfg['include_formatting'], include_links=cfg['include_links'], deduplicate=cfg['deduplicate'], with_metadata=cfg['with_metadata']); print(result if result else '', end='')";
     let out = std::process::Command::new("uv")
         .args([
@@ -861,37 +844,15 @@ fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> String {
         .output();
 
     let _ = std::fs::remove_file(&tmp);
-    match out {
-        Ok(o) => {
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] trafilatura failed (exit {}): {}\n",
-                    o.status,
-                    stderr.trim()
-                );
-            }
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            if stdout.is_empty() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] trafilatura returned empty output. stderr: {}\n",
-                    stderr.trim()
-                );
-            }
-            stdout.to_string()
-        }
-        Err(e) => format!("[ERROR] uv failed: {e}\n"),
-    }
+    command_output_text(out, "trafilatura")
 }
 
-fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> String {
+fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("h2t_py_{}.html", uuid::Uuid::new_v4()));
-    let _ = std::fs::write(&tmp, html);
-    let cfg_json = match serde_json::to_string(cfg) {
-        Ok(json) => json,
-        Err(error) => return format!("[ERROR] serializing configuration failed: {error}"),
-    };
+    std::fs::write(&tmp, html)
+        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
+    let cfg_json = serde_json::to_string(cfg)
+        .map_err(|error| format!("serializing configuration: {error}"))?;
     let script = r"from html2text import HTML2Text; import json, sys; cfg = json.loads(sys.argv[2]); h = HTML2Text(); h.ignore_links = cfg['ignore_links']; h.ignore_images = cfg['ignore_images']; h.ignore_emphasis = cfg['ignore_emphasis']; h.body_width = cfg['body_width']; h.unicode_snob = cfg['unicode_snob']; h.escape_snob = cfg['escape_snob']; h.inline_links = cfg['inline_links']; h.google_doc = cfg['google_doc']; h.dash_unordered_list = cfg['dash_unordered_list']; html = open(sys.argv[1]).read(); print(h.handle(html), end='')";
     let out = std::process::Command::new("uv")
         .args([
@@ -909,28 +870,7 @@ fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> String {
         .output();
 
     let _ = std::fs::remove_file(&tmp);
-    match out {
-        Ok(o) => {
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] html2text.py failed (exit {}): {}\n",
-                    o.status,
-                    stderr.trim()
-                );
-            }
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            if stdout.is_empty() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] html2text.py returned empty output. stderr: {}\n",
-                    stderr.trim()
-                );
-            }
-            stdout.to_string()
-        }
-        Err(e) => format!("[ERROR] uv failed: {e}\n"),
-    }
+    command_output_text(out, "html2text.py")
 }
 
 fn build_markdownify_config_json(cfg: &MarkdownifyConfig) -> Result<String, String> {
@@ -1029,13 +969,12 @@ fn build_markdownify_config_json(cfg: &MarkdownifyConfig) -> Result<String, Stri
     .map_err(|error| error.to_string())
 }
 
-fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> String {
+fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("markdownify_{}.html", uuid::Uuid::new_v4()));
-    let _ = std::fs::write(&tmp, html);
-    let cfg_json = match build_markdownify_config_json(cfg) {
-        Ok(cfg_json) => cfg_json,
-        Err(error) => return format!("[ERROR] markdownify config invalid: {error}\n"),
-    };
+    std::fs::write(&tmp, html)
+        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
+    let cfg_json = build_markdownify_config_json(cfg)
+        .map_err(|error| format!("markdownify configuration invalid: {error}"))?;
     let script = r"from markdownify import markdownify as md; import json, sys; cfg = json.loads(sys.argv[2]); kwargs = {'autolinks': cfg['autolinks'], 'default_title': cfg['default_title'], 'heading_style': cfg['heading_style'], 'bullets': cfg['bullets'], 'strong_em_symbol': cfg['strong_em_symbol'], 'sub_symbol': cfg['sub_symbol'], 'sup_symbol': cfg['sup_symbol'], 'newline_style': cfg['newline_style'], 'code_language': cfg['code_language'], 'escape_asterisks': cfg['escape_asterisks'], 'escape_underscores': cfg['escape_underscores'], 'escape_misc': cfg['escape_misc'], 'keep_inline_images_in': cfg['keep_inline_images_in'], 'table_infer_header': cfg['table_infer_header'], 'wrap': cfg['wrap'], 'wrap_width': cfg['wrap_width']}; html = open(sys.argv[1]).read(); strip = cfg['strip']; convert = cfg['convert']; strip_document = cfg['strip_document']; strip_pre = cfg['strip_pre']; bs4_options = cfg['bs4_options']; kwargs['strip'] = strip if strip else None; kwargs['convert'] = convert if convert else None; kwargs['strip_document'] = strip_document; kwargs['strip_pre'] = strip_pre; kwargs['bs4_options'] = bs4_options; kwargs = {key: value for key, value in kwargs.items() if value is not None}; print(md(html, **kwargs), end='')";
     let out = std::process::Command::new("uv")
         .args([
@@ -1053,28 +992,7 @@ fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> String {
         .output();
 
     let _ = std::fs::remove_file(&tmp);
-    match out {
-        Ok(o) => {
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] markdownify failed (exit {}): {}\n",
-                    o.status,
-                    stderr.trim()
-                );
-            }
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            if stdout.is_empty() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] markdownify returned empty output. stderr: {}\n",
-                    stderr.trim()
-                );
-            }
-            stdout.to_string()
-        }
-        Err(e) => format!("[ERROR] uv failed: {e}\n"),
-    }
+    command_output_text(out, "markdownify")
 }
 
 fn build_lightpanda_args(parsed_url: &url::Url, cfg: &LightpandaConfig) -> Vec<String> {
@@ -1098,41 +1016,21 @@ fn build_lightpanda_args(parsed_url: &url::Url, cfg: &LightpandaConfig) -> Vec<S
     args
 }
 
-fn run_lightpanda(parsed_url: &url::Url, cfg: &LightpandaConfig) -> String {
+fn run_lightpanda(parsed_url: &url::Url, cfg: &LightpandaConfig) -> Result<String, String> {
     let args = build_lightpanda_args(parsed_url, cfg);
     let out = std::process::Command::new("docker").args(&args).output();
 
-    match out {
-        Ok(o) => {
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] lightpanda docker exec failed (exit {}): {}\n",
-                    o.status,
-                    stderr.trim()
-                );
-            }
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            if stdout.is_empty() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] lightpanda returned empty output. stderr: {}\n",
-                    stderr.trim()
-                );
-            }
-            stdout.to_string()
-        }
-        Err(e) => format!("[ERROR] docker exec lightpanda failed: {e}\n"),
-    }
+    command_output_text(out, "lightpanda")
 }
 
-fn run_webclaw(html: &str, states: &ExtractorStates) -> String {
+fn run_webclaw(html: &str, states: &ExtractorStates) -> Result<String, String> {
     let cfg = states
         .states
         .get("webclaw")
         .map_or_default(|s| s.config.webclaw.clone());
     let tmp = std::env::temp_dir().join(format!("webclaw_{}.html", uuid::Uuid::new_v4()));
-    let _ = std::fs::write(&tmp, html);
+    std::fs::write(&tmp, html)
+        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let mut args = vec!["--file".to_string(), tmp.to_string_lossy().to_string()];
     if cfg.only_main_content {
         args.push("--only-main-content".to_string());
@@ -1151,36 +1049,12 @@ fn run_webclaw(html: &str, states: &ExtractorStates) -> String {
     } else {
         cfg.format
     });
-    let bin = std::path::Path::new("/home/jan/git/webclaw/webclaw_bin");
-    let out = if bin.exists() {
-        std::process::Command::new(bin).args(&args).output()
-    } else {
-        std::process::Command::new("webclaw").args(&args).output()
-    };
+    let binary = std::env::var_os("HTML_TO_TEXT_WEBCLAW_BIN")
+        .unwrap_or_else(|| std::ffi::OsString::from("webclaw"));
+    let out = std::process::Command::new(binary).args(&args).output();
 
     let _ = std::fs::remove_file(&tmp);
-    match out {
-        Ok(o) => {
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] webclaw failed (exit {}): {}\n",
-                    o.status,
-                    stderr.trim()
-                );
-            }
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            if stdout.is_empty() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] webclaw returned empty output. stderr: {}\n",
-                    stderr.trim()
-                );
-            }
-            stdout.to_string()
-        }
-        Err(e) => format!("[ERROR] webclaw not found: {e}\n"),
-    }
+    command_output_text(out, "webclaw")
 }
 
 const E2M_SCRIPT: &str = r#"
@@ -1250,7 +1124,7 @@ result = parser._prepare_unstructured_data_to_e2m_parsed_data(
 print(result.text, end="")
 "#;
 
-fn run_e2m(html: &str, states: &ExtractorStates) -> String {
+fn run_e2m(html: &str, states: &ExtractorStates) -> Result<String, String> {
     let cfg = states
         .states
         .get("e2m")
@@ -1261,13 +1135,13 @@ fn run_e2m(html: &str, states: &ExtractorStates) -> String {
         &cfg.engine
     };
     let work_dir = std::env::temp_dir().join(format!("e2m_{}", uuid::Uuid::new_v4()));
-    let _ = std::fs::create_dir_all(&work_dir);
+    std::fs::create_dir_all(&work_dir)
+        .map_err(|error| format!("creating e2m directory: {error}"))?;
     let tmp = work_dir.join("input.html");
-    let _ = std::fs::write(&tmp, html);
-    let langs = match serde_json::to_string(&cfg.langs) {
-        Ok(json) => json,
-        Err(error) => return format!("[ERROR] serializing e2m language settings failed: {error}"),
-    };
+    std::fs::write(&tmp, html)
+        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
+    let langs = serde_json::to_string(&cfg.langs)
+        .map_err(|error| format!("serializing e2m languages: {error}"))?;
     let script = E2M_SCRIPT;
     let out = std::process::Command::new("uv")
         .args([
@@ -1302,31 +1176,7 @@ fn run_e2m(html: &str, states: &ExtractorStates) -> String {
 
     let _ = std::fs::remove_file(&tmp);
     let _ = std::fs::remove_dir_all(&work_dir);
-    match out {
-        Ok(o) => {
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                return format!(
-                    "[ERROR] e2m failed (exit {}): {}\n",
-                    o.status,
-                    stderr.trim()
-                );
-            }
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            if !stderr.trim().is_empty() {
-                eprintln!("[e2m] {}", stderr.trim());
-            }
-            if stdout.is_empty() {
-                return format!(
-                    "[ERROR] e2m returned empty output. stderr: {}\n",
-                    stderr.trim()
-                );
-            }
-            stdout.to_string()
-        }
-        Err(e) => format!("[ERROR] uv failed: {e}\n"),
-    }
+    command_output_text(out, "e2m")
 }
 
 fn build_html_to_markdown_go_args(
@@ -1366,48 +1216,26 @@ fn run_html_to_markdown_go(
     html: &str,
     parsed_url: &url::Url,
     cfg: &HtmlToMarkdownGoConfig,
-) -> String {
+) -> Result<String, String> {
     let args = build_html_to_markdown_go_args(parsed_url, cfg);
-    let out = std::process::Command::new("/tmp/html2markdown")
+    let binary = std::env::var_os("HTML_TO_MARKDOWN_GO_BIN")
+        .unwrap_or_else(|| std::ffi::OsString::from("html2markdown"));
+    // Supply a seekable, anonymous file as stdin. Writing a large document
+    // synchronously into a child's stdin pipe can deadlock if the child also
+    // fills its stdout pipe before we start draining it.
+    let mut input = tempfile::tempfile()
+        .map_err(|error| format!("html-to-markdown-go temporary input: {error}"))?;
+    input
+        .write_all(html.as_bytes())
+        .map_err(|error| format!("html-to-markdown-go temporary input: {error}"))?;
+    input
+        .rewind()
+        .map_err(|error| format!("html-to-markdown-go rewind: {error}"))?;
+    let out = std::process::Command::new(binary)
         .args(&args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
-
-    match out {
-        Ok(mut child) => {
-            use std::io::Write;
-            if let Some(ref mut stdin) = child.stdin {
-                stdin.write_all(html.as_bytes()).ok();
-            }
-            let result = child.wait_with_output();
-
-            match result {
-                Ok(o) => {
-                    if !o.status.success() {
-                        let stderr = String::from_utf8_lossy(&o.stderr);
-                        return format!(
-                            "[ERROR] html-to-markdown-go failed (exit {}): {}\n",
-                            o.status,
-                            stderr.trim()
-                        );
-                    }
-                    let stdout = String::from_utf8_lossy(&o.stdout);
-                    if stdout.is_empty() {
-                        let stderr = String::from_utf8_lossy(&o.stderr);
-                        return format!(
-                            "[ERROR] html-to-markdown-go returned empty output. stderr: {}\n",
-                            stderr.trim()
-                        );
-                    }
-                    stdout.to_string()
-                }
-                Err(e) => format!("[ERROR] html-to-markdown-go wait failed: {e}\n"),
-            }
-        }
-        Err(e) => format!("[ERROR] html2markdown spawn failed: {e}\n"),
-    }
+        .stdin(std::process::Stdio::from(input))
+        .output();
+    command_output_text(out, "html-to-markdown-go")
 }
 
 #[derive(Clone)]
@@ -1604,16 +1432,17 @@ mod tests {
     }
 
     #[test]
-    fn turndown_removes_script_content() {
+    fn turndown_removes_script_content() -> Result<(), Box<dyn std::error::Error>> {
         let output = run_turndown(
             "<html><body><article><p>Body</p></article><script>if(window.foo){bar()}</script></body></html>",
             &TurndownConfig::default(),
             &["script", "style", "noscript"],
-        );
+        )?;
 
         assert!(output.contains("Body"));
         assert!(!output.contains("window.foo"));
         assert!(!output.contains("bar()"));
+        Ok(())
     }
 
     #[test]
@@ -1816,7 +1645,7 @@ mod tests {
     }
 
     #[test]
-    fn e2m_handles_images_without_image_paths() {
+    fn e2m_handles_images_without_image_paths() -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><body><h1>Title</h1><p>Before</p><img src=\"https://example.com/a.png\" alt=\"A\"><p>After</p></body></html>";
         let states = single_extractor_state(
             "e2m",
@@ -1829,13 +1658,26 @@ mod tests {
                 ..Default::default()
             },
         );
-
-        let output = run_e2m(html, &states);
-
-        assert!(!output.starts_with("[ERROR]"), "{output}");
+        let dir = tempfile::tempdir()?;
+        let mut runner = Runner::with_timeout(
+            dir.path().to_path_buf(),
+            html.to_string(),
+            std::time::Duration::from_secs(120),
+        );
+        runner.run_isolated("e2m", "e2m", "https://example.com", &states);
+        let outcomes = runner.into_stats();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0].status,
+            ExtractionStatus::Success,
+            "isolated e2m failed: {}",
+            outcomes[0].error
+        );
+        let output = std::fs::read_to_string(dir.path().join("e2m.txt"))?;
         assert!(output.contains("Title"), "{output}");
         assert!(output.contains("Before"));
         assert!(output.contains("After"));
+        Ok(())
     }
 
     #[test]

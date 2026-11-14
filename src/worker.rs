@@ -237,7 +237,12 @@ pub fn execute_isolated(
             .arg(&reply_path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::inherit())
+            // All subprocess scratch paths reside below the parent-owned
+            // exchange directory, which is deleted even after SIGKILL.
+            .env("TMPDIR", exchange.path())
+            .env("TMP", exchange.path())
+            .env("TEMP", exchange.path());
         match wait_for_group(&mut command, timeout)? {
             GroupExit::TimedOut => Err(format!("__timeout__ {}", timeout.as_secs_f64())),
             GroupExit::Exited(exit) => {

@@ -42,4 +42,6 @@ jobs:
         "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.7"
         export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
         uv run --no-project --python 3.12 --with wisup-e2m==0.1.61 -- python3 -c 'from wisup_e2m import HtmlParser'
+        # Worker tests spawn the real binary, not a Rust test harness.
+        cargo build --locked --all-features
         cargo test --locked --all-features e2m_handles_images_without_image_paths -- --nocapture
