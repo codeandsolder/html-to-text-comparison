@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -578,8 +579,17 @@ impl ExtractorStates {
     }
 
     pub fn save(&self, path: &std::path::PathBuf) -> Result<(), String> {
-        let s = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, s).map_err(|e| e.to_string())
+        let serialized = serde_json::to_vec_pretty(self).map_err(|error| error.to_string())?;
+        let parent = path.parent().ok_or("states path has no parent directory")?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
+
+        temporary
+            .write_all(&serialized)
+            .map_err(|error| error.to_string())?;
+        temporary.persist(path).map_err(|error| error.to_string())?;
+        Ok(())
     }
 }
 

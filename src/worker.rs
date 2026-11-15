@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
     thread,
@@ -206,6 +207,7 @@ fn wait_for_group(command: &mut Command, timeout: Duration) -> Result<GroupExit,
 pub fn run_captured_command(
     mut command: Command,
     timeout: Duration,
+    max_stdout: usize,
 ) -> Result<std::process::Output, String> {
     let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
     let stdout_path = scratch.path().join("stdout");
@@ -230,10 +232,24 @@ pub fn run_captured_command(
         }
         GroupExit::Exited(status) => status,
     };
+    let size = fs::metadata(&stdout_path)
+        .map_err(|error| error.to_string())?
+        .len();
+    if size > u64::try_from(max_stdout).unwrap_or(u64::MAX) {
+        return Err(format!("browser snapshot exceeds {max_stdout} byte limit"));
+    }
+    // Diagnostic output is not HTML; a failed Chromium process can be
+    // extremely verbose and must not be loaded into memory without a bound.
+    let mut stderr = Vec::new();
+    fs::File::open(stderr_path)
+        .map_err(|error| error.to_string())?
+        .take(128 * 1024)
+        .read_to_end(&mut stderr)
+        .map_err(|error| error.to_string())?;
     Ok(std::process::Output {
         status,
         stdout: fs::read(stdout_path).map_err(|error| error.to_string())?,
-        stderr: fs::read(stderr_path).map_err(|error| error.to_string())?,
+        stderr,
     })
 }
 
@@ -321,6 +337,22 @@ pub fn execute_isolated(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn browser_stdout_is_bounded_before_loading() -> Result<(), Box<dyn std::error::Error>> {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 123456789"]);
+        let error = run_captured_command(command, Duration::from_secs(2), 5);
+        assert!(error.is_err_and(|message| message.contains("byte limit")));
+
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 12345"]);
+        let output = run_captured_command(command, Duration::from_secs(2), 5)?;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"12345");
+        Ok(())
+    }
 
     #[cfg(unix)]
     #[test]

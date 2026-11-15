@@ -1387,30 +1387,29 @@
         function alignChangedLines(leftLines, rightLines) {
             const leftKeys = leftLines.map(normalizeLineForMatching);
             const rightKeys = rightLines.map(normalizeLineForMatching);
-            const dp = Array.from({ length: leftLines.length + 1 }, () => Array(rightLines.length + 1).fill(0));
-
-            for (let i = leftLines.length - 1; i >= 0; i -= 1) {
-                for (let j = rightLines.length - 1; j >= 0; j -= 1) {
-                    if (leftKeys[i] && leftKeys[i] === rightKeys[j]) {
-                        dp[i][j] = dp[i + 1][j + 1] + 1;
-                    } else {
-                        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
-                    }
-                }
-            }
-
             const pairs = [];
-            let i = 0;
-            let j = 0;
-            while (i < leftLines.length && j < rightLines.length) {
-                if (leftKeys[i] && leftKeys[i] === rightKeys[j]) {
-                    pairs.push([i, j]);
-                    i += 1;
-                    j += 1;
-                } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-                    i += 1;
+            let leftIndex = 0;
+            let rightIndex = 0;
+
+            // Reuse jsdiff's Myers algorithm instead of constructing an
+            // O(leftLines * rightLines) LCS matrix for large changed hunks.
+            // The comparator ignores empty normalized lines as anchors.
+            for (const change of Diff.diffArrays(leftKeys, rightKeys, {
+                comparator: (left, right) => Boolean(left) && left === right
+            })) {
+                const length = change.value.length;
+                if (change.added) {
+                    rightIndex += length;
+                } else if (change.removed) {
+                    leftIndex += length;
                 } else {
-                    j += 1;
+                    for (let i = 0; i < length; i += 1) {
+                        if (leftKeys[leftIndex + i]) {
+                            pairs.push([leftIndex + i, rightIndex + i]);
+                        }
+                    }
+                    leftIndex += length;
+                    rightIndex += length;
                 }
             }
             return pairs;

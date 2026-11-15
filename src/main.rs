@@ -41,6 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("browser acquisition requires an HTTP(S) URL, not a file".into());
             }
             method = acquisition::Acquisition::File;
+            let max_bytes = acquisition::max_html_bytes()?;
+            if std::fs::metadata(&input)?.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX) {
+                return Err(format!("input HTML exceeds {max_bytes} byte limit").into());
+            }
             let html = std::fs::read_to_string(&input)?;
             let canonical = std::fs::canonicalize(&input)?;
             let url = url::Url::from_file_path(canonical)

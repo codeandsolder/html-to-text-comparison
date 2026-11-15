@@ -46,8 +46,15 @@ CloakBrowser uses its Playwright-compatible Node wrapper and custom Chromium bin
 ### Web UI and storage
 
 ```sh
+# Default: local-only, no cross-origin API access
 HTML_TO_TEXT_MAX_SAVED_RUNS=100 cargo run --release -- --server 3000 /path/to/data
+# For a trusted LAN or an authenticated reverse proxy:
+HTML_TO_TEXT_BIND=0.0.0.0 cargo run --release -- --server 3000 /path/to/data
 ```
+
+The web server listens on 127.0.0.1 by default. Use HTML_TO_TEXT_BIND to choose another IPv4/IPv6 interface. The API can acquire arbitrary URLs and run external tools, so do not expose it on an untrusted network without access controls; permissive cross-origin headers are deliberately disabled.
+
+HTML acquisition has a 45-second total HTTP deadline and a default 64 MiB decoded HTML limit (HTML_TO_TEXT_MAX_HTML_BYTES, configurable to 1 GiB). Browser acquisition uses its own process deadline and the same output-size cap. The extractor settings file is saved atomically; saved-run metadata changes and pruning are serialized within the server process.
 
 The server stores score metadata under `/path/to/data/scores`, with corresponding HTML snapshots and extractor outputs under `/path/to/data/scores/artifacts/<run-id>/`. The retention cap defaults to 100 saved runs, can be set through `HTML_TO_TEXT_MAX_SAVED_RUNS` (positive integer), and deletes old outputs together with their metadata. Failed/empty runs remain inspectable until deleted or expired. Live previews use ephemeral directories.
 

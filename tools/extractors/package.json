@@ -16,5 +16,8 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "diff": "9.0.0"
   }
 }

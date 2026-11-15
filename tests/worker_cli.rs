@@ -123,3 +123,81 @@ fn node_snapshot_parsers_run_through_real_worker_without_fetching(
     }
     Ok(())
 }
+
+#[test]
+fn http_acquisition_rejects_oversized_response_before_extraction(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    let workspace = tempfile::tempdir()?;
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let url = format!("http://{}/too-big", listener.local_addr()?);
+    let serve = thread::spawn(move || -> std::io::Result<()> {
+        let (mut socket, _) = listener.accept()?;
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request)?;
+        let body = "x".repeat(100);
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )?;
+        Ok(())
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_html-to-text-comparison"))
+        .env("HTML_TO_TEXT_MAX_HTML_BYTES", "64")
+        .args(["--acquire", "http", "--extractor", "nanohtml2text", &url])
+        .current_dir(workspace.path())
+        .output()?;
+    serve.join().map_err(|_| "HTTP test server panicked")??;
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("exceeds 64 byte limit"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!workspace.path().join("out").exists());
+    Ok(())
+}
+
+#[test]
+fn http_acquisition_decodes_declared_non_utf8_charset() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    let workspace = tempfile::tempdir()?;
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let url = format!("http://{}/latin1", listener.local_addr()?);
+    let serve = thread::spawn(move || -> std::io::Result<()> {
+        let (mut socket, _) = listener.accept()?;
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request)?;
+        let body = b"<html><body><h1>caf\xe9</h1></body></html>";
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=iso-8859-1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )?;
+        socket.write_all(body)?;
+        Ok(())
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_html-to-text-comparison"))
+        .args(["--acquire", "http", "--extractor", "nanohtml2text", &url])
+        .current_dir(workspace.path())
+        .output()?;
+    serve
+        .join()
+        .map_err(|_| "charset fixture server panicked")??;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = fs::read_to_string(workspace.path().join("out/nanohtml2text.txt"))?;
+    assert!(
+        result.contains("café"),
+        "incorrect charset decode: {result}"
+    );
+    Ok(())
+}
