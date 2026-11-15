@@ -6,7 +6,7 @@ This page documents the current tool boundary. Source of truth: `src/scores.rs` 
 
 1. CLI (`--extractor NAME` or all) and web select extractors using the same `run_named_extractor` dispatch.
 2. The root page was acquired once using HTTP or an explicitly selected Lightpanda or CloakBrowser navigation. The resulting HTML snapshot is identical for every converter. Jina Reader receives that HTML by POST, and Percollate is configured without AMP-alternate refetches or remote image inlining.
-3. The parent serializes the exact HTML snapshot, URL, extractor identity, settings and destination directory to private temporary IPC files.
+3. The parent writes the HTML snapshot exactly once as `source.html` in the run-owned artifacts directory. Each worker's small IPC JSON contains only the source path, URL, extractor identity, settings and destination directory; it **never serializes the HTML bytes again**. The worker validates that the source is its run's `source.html` and loads it read-only. CLI, saved-score comparisons and preview all use this same contract.
 4. A separate instance of the application receives `--extract-worker` and runs exactly one extractor. That worker may spawn Node/Python/Go subprocesses. Browsers only run in the earlier acquisition stage.
 5. The parent monitors a Unix process group or Windows Job Object. The per-extractor deadline applies to the entire child process group; expiration terminates descendants and reaps the leader.
 6. The worker emits a typed result with `Success`, `NoContent`, `Failed`, `TimedOut` or `Panicked` and a human-readable diagnostic. The parent validates the output, records end-to-end time and deletes IPC/scratch files, including after timeouts.

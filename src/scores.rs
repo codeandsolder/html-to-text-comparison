@@ -563,6 +563,8 @@ pub fn preview_single_extractor_settings(
     let html_size = html.len();
     let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
     let out_dir = temporary.path().to_path_buf();
+    std::fs::write(out_dir.join("source.html"), html)
+        .map_err(|error| format!("writing temporary preview snapshot: {error}"))?;
     let mut runner = Runner::new(out_dir.clone(), html.to_string());
     runner.run_isolated(extractor, extractor, parsed_url.as_str(), &states);
 
@@ -1550,33 +1552,38 @@ mod tests {
     #[test]
     fn recent_runs_survive_same_second_retention() -> Result<(), Box<dyn std::error::Error>> {
         let temp = tempfile::tempdir()?;
-        let store = ScoreStore::with_retention(temp.path().join("scores"), 1)?;
+        let store = ScoreStore::with_retention(temp.path().join("scores"), 2)?;
         let mut states = ExtractorStates::default();
         for entry in states.states.values_mut() {
             entry.enabled = false;
         }
-        let first = run_extraction(
+        let mut first = run_extraction(
             "https://example.com/",
             "<h1>first</h1>",
             Acquisition::File,
             &states,
             &store,
         )?;
-        let second = run_extraction(
+        let mut second = run_extraction(
             "https://example.com/",
             "<h1>second</h1>",
             Acquisition::File,
             &states,
             &store,
         )?;
-        assert_eq!(
-            first.timestamp, second.timestamp,
-            "fixture should exercise same-second ordering"
-        );
-        let saved = store.list()?;
+        // Force the same timestamp instead of depending on two worker runs
+        // completing before a wall-clock second boundary under CI load.
+        assert!(Uuid::parse_str(&first.id)? < Uuid::parse_str(&second.id)?);
+        first.timestamp = "same-second".to_string();
+        second.timestamp = first.timestamp.clone();
+        store.save(&first)?;
+        store.save(&second)?;
+        let limited = ScoreStore::with_retention(temp.path().join("scores"), 1)?;
+        limited.prune()?;
+        let saved = limited.list()?;
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].id, second.id);
-        assert!(store.load(&first.id).is_err());
+        assert!(limited.load(&first.id).is_err());
         Ok(())
     }
 
@@ -2031,6 +2038,7 @@ mod tests {
             },
         );
         let dir = tempfile::tempdir()?;
+        fs::write(dir.path().join("source.html"), html)?;
         let mut runner = Runner::with_timeout(
             dir.path().to_path_buf(),
             html.to_string(),
@@ -2049,6 +2057,38 @@ mod tests {
         assert!(output.contains("Title"), "{output}");
         assert!(output.contains("Before"));
         assert!(output.contains("After"));
+        Ok(())
+    }
+
+    #[test]
+    fn two_native_extractors_share_one_persisted_snapshot() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let html = "<html><body><h1>Shared source</h1><p>Same captured HTML for every converter.</p></body></html>";
+        fs::write(directory.path().join("source.html"), html)?;
+        let mut runner = Runner::new(directory.path().to_path_buf(), html.to_string());
+        let states = ExtractorStates::default();
+        for key in ["nanohtml2text", "html2md"] {
+            runner.run_isolated(key, key, "https://example.com/", &states);
+        }
+        let results = runner.into_stats();
+        assert_eq!(results.len(), 2);
+        for item in results {
+            assert_eq!(
+                item.status,
+                ExtractionStatus::Success,
+                "{}: {}",
+                item.name,
+                item.error
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(directory.path().join("source.html"))?,
+            html
+        );
+        assert!(fs::read_dir(directory.path())?
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_type().is_ok_and(|kind| kind.is_dir())));
         Ok(())
     }
 

@@ -20,6 +20,9 @@ fn cli_executes_native_extractor_in_isolated_worker() -> Result<(), Box<dyn std:
     );
     let content = fs::read_to_string(root.path().join("out/nanohtml2text.txt"))?;
     assert!(content.contains("Hello worker"), "{content}");
+    let source = fs::read_to_string(root.path().join("out/source.html"))?;
+    assert_eq!(source, "<html><body><h1>Hello worker</h1></body></html>");
+    assert!(!root.path().join("out/html.html").exists());
     let leftovers = fs::read_dir(root.path().join("out"))?
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_ok_and(|ty| ty.is_dir()))
