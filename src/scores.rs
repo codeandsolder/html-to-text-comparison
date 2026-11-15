@@ -1552,33 +1552,38 @@ mod tests {
     #[test]
     fn recent_runs_survive_same_second_retention() -> Result<(), Box<dyn std::error::Error>> {
         let temp = tempfile::tempdir()?;
-        let store = ScoreStore::with_retention(temp.path().join("scores"), 1)?;
+        let store = ScoreStore::with_retention(temp.path().join("scores"), 2)?;
         let mut states = ExtractorStates::default();
         for entry in states.states.values_mut() {
             entry.enabled = false;
         }
-        let first = run_extraction(
+        let mut first = run_extraction(
             "https://example.com/",
             "<h1>first</h1>",
             Acquisition::File,
             &states,
             &store,
         )?;
-        let second = run_extraction(
+        let mut second = run_extraction(
             "https://example.com/",
             "<h1>second</h1>",
             Acquisition::File,
             &states,
             &store,
         )?;
-        assert_eq!(
-            first.timestamp, second.timestamp,
-            "fixture should exercise same-second ordering"
-        );
-        let saved = store.list()?;
+        // Force the same timestamp instead of depending on two worker runs
+        // completing before a wall-clock second boundary under CI load.
+        assert!(Uuid::parse_str(&first.id)? < Uuid::parse_str(&second.id)?);
+        first.timestamp = "same-second".to_string();
+        second.timestamp = first.timestamp.clone();
+        store.save(&first)?;
+        store.save(&second)?;
+        let limited = ScoreStore::with_retention(temp.path().join("scores"), 1)?;
+        limited.prune()?;
+        let saved = limited.list()?;
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].id, second.id);
-        assert!(store.load(&first.id).is_err());
+        assert!(limited.load(&first.id).is_err());
         Ok(())
     }
 
