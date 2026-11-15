@@ -32,7 +32,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(1);
         }
     } else if args.len() > 1 {
-        let (extractor, mut method, input) = parse_cli_args(&args[1..])?;
+        let CliArgs {
+            extractor,
+            mut method,
+            input,
+            base_url,
+        } = parse_cli_args(&args[1..])?;
         let current_dir = std::env::current_dir()?;
         let out_dir = current_dir.join("out");
 
@@ -47,10 +52,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let html = std::fs::read_to_string(&input)?;
             let canonical = std::fs::canonicalize(&input)?;
-            let url = url::Url::from_file_path(canonical)
-                .map_err(|()| std::io::Error::other("Cannot represent input file as URL"))?;
+            let url = match base_url {
+                Some(url) => url,
+                None => url::Url::from_file_path(canonical)
+                    .map_err(|()| std::io::Error::other("Cannot represent input file as URL"))?,
+            };
             (html, url)
         } else {
+            if base_url.is_some() {
+                return Err("--base-url only applies to a local HTML snapshot".into());
+            }
             let url = url::Url::parse(&input)?;
             let html = method.acquire(&url)?;
             (html, url)
@@ -93,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Usage:");
         eprintln!("  {} <url_or_file>     Run all extractors", args[0]);
         eprintln!(
-            "  {} --extractor <name> <url_or_file>     Run one extractor",
+            "  {} --extractor <name> [--base-url URL] <url_or_file>     Run one extractor",
             args[0]
         );
         eprintln!("  {} --acquire {{http|lightpanda|cloakbrowser}} [--extractor NAME] <url>  One acquisition", args[0]);
@@ -104,17 +115,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse_cli_args(
-    arguments: &[String],
-) -> Result<(Option<String>, acquisition::Acquisition, String), Box<dyn std::error::Error>> {
+struct CliArgs {
+    extractor: Option<String>,
+    method: acquisition::Acquisition,
+    input: String,
+    base_url: Option<url::Url>,
+}
+
+fn parse_cli_args(arguments: &[String]) -> Result<CliArgs, Box<dyn std::error::Error>> {
     let mut extractor: Option<String> = None;
     let mut method = acquisition::Acquisition::Http;
+    let mut base_url = None;
     let mut input = None;
     let mut words = arguments.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
             "--extractor" => {
                 extractor = Some(words.next().ok_or("--extractor requires a name")?.clone());
+            }
+            "--base-url" => {
+                let parsed = url::Url::parse(words.next().ok_or("--base-url requires a URL")?)?;
+                if !matches!(parsed.scheme(), "http" | "https") {
+                    return Err("--base-url must use http or https".into());
+                }
+                base_url = Some(parsed);
             }
             "--acquire" => {
                 method = match words
@@ -136,5 +160,10 @@ fn parse_cli_args(
         }
     }
     let input = input.ok_or("missing HTML file or URL")?;
-    Ok((extractor, method, input))
+    Ok(CliArgs {
+        extractor,
+        method,
+        input,
+        base_url,
+    })
 }
