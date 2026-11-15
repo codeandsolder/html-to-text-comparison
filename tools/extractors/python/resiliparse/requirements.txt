@@ -1,1 +1,1 @@
-resiliparse==1.0.9
+resiliparse==2.0.1
