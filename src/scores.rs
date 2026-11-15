@@ -669,7 +669,7 @@ pub fn run_cli_extractor(
                 .map_or_default(|s| s.config.html2text_py.clone()),
         ),
         "mozilla-readability" => run_mozilla_readability(html),
-        "defuddle" | "node-html-markdown" => {
+        "defuddle" | "node-html-markdown" | "webforai" => {
             run_node_snapshot_parser(extractor_key, html, parsed_url)
         }
         "markdownify" => run_markdownify(

@@ -26,6 +26,7 @@ The Rust converter contract is `Result<String, String>`. A text document beginni
 | Defuddle | `node tools/extractors/snapshot-parsers.mjs defuddle` | Snapshot file and original URL; `defuddle/node` with `useAsync:false`, never remote fallback |
 | node-html-markdown | `node tools/extractors/snapshot-parsers.mjs node-html-markdown` | Local full-document conversion, no fetching |
 | Mozilla Readability | `node -e` with `@mozilla/readability` + `linkedom` | Local HTML file; full upstream JS algorithm, no navigation |
+| webforai | Node module webforai pinned in npm lockfile | Acquired HTML and source URL for local link resolution; no network fetch |
 | Webclaw | `webclaw` or `HTML_TO_TEXT_WEBCLAW_BIN` | Temporary HTML file plus configured CLI arguments |
 | E2M | `uv run --no-project --python 3.12 --with-requirements tools/extractors/python/e2m/requirements.txt` | HTML scratch file, language/engine/processing flags; release-tier integration test |
 | html-to-markdown-go | `html2markdown` or `HTML_TO_MARKDOWN_GO_BIN` | Seekable file attached as stdin to avoid stdout/pipe deadlock; plugin flags |

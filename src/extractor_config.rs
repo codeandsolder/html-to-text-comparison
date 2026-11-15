@@ -524,7 +524,7 @@ pub fn default_timeout_ms(name: &str) -> u64 {
         "e2m" => 120_000,
         "webclaw" => 60_000,
         "percollate" | "trafilatura" | "markdownify" | "html2text-py" | "resiliparse" => 45_000,
-        "turndown" | "html-to-markdown-go" => 30_000,
+        "turndown" | "html-to-markdown-go" | "webforai" => 30_000,
         _ => 10_000,
     }
 }
@@ -617,6 +617,7 @@ impl Default for ExtractorStates {
             "trafilatura",
             "turndown",
             "webclaw",
+            "webforai",
         ];
         for name in all_extractors {
             let cfg = match name {
