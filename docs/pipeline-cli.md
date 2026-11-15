@@ -19,12 +19,14 @@ The Rust converter contract is `Result<String, String>`. A text document beginni
 |---|---|---|
 | Turndown | `node -e` with pinned `turndown` module | HTML scratch file; `TurndownConfig` serialized to JS options |
 | Percollate | Pinned `percollate/cli.js md -o -` | HTML scratch file; Markdown options from `PercollateConfig` |
+| Resiliparse | uv with pinned requirements in tools/extractors/python/resiliparse/requirements.txt | Already-acquired HTML snapshot, Lexbor-based main-content plaintext extraction |
 | Trafilatura | `uv run --no-project --with-requirements tools/extractors/python/trafilatura/requirements.txt` | HTML scratch file and JSON flags |
 | html2text-py | `uv run --no-project --with-requirements tools/extractors/python/html2text/requirements.txt` | HTML scratch file and JSON flags |
 | Markdownify | `uv run --no-project --with-requirements tools/extractors/python/markdownify/requirements.txt` | HTML scratch file and serialized options |
 | Defuddle | `node tools/extractors/snapshot-parsers.mjs defuddle` | Snapshot file and original URL; `defuddle/node` with `useAsync:false`, never remote fallback |
 | node-html-markdown | `node tools/extractors/snapshot-parsers.mjs node-html-markdown` | Local full-document conversion, no fetching |
 | Mozilla Readability | `node -e` with `@mozilla/readability` + `linkedom` | Local HTML file; full upstream JS algorithm, no navigation |
+| webforai | Node module webforai pinned in npm lockfile | Acquired HTML and source URL for local link resolution; no network fetch |
 | Webclaw | `webclaw` or `HTML_TO_TEXT_WEBCLAW_BIN` | Temporary HTML file plus configured CLI arguments |
 | E2M | `uv run --no-project --python 3.12 --with-requirements tools/extractors/python/e2m/requirements.txt` | HTML scratch file, language/engine/processing flags; release-tier integration test |
 | html-to-markdown-go | `html2markdown` or `HTML_TO_MARKDOWN_GO_BIN` | Seekable file attached as stdin to avoid stdout/pipe deadlock; plugin flags |

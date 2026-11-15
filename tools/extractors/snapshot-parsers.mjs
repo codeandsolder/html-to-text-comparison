@@ -10,6 +10,10 @@ async function parseSnapshot(kind, html, url) {
             const result = await Defuddle(document, url, { markdown: true, useAsync: false });
             return result?.contentMarkdown ?? result?.content ?? '';
         }
+        case 'webforai': {
+            const { htmlToMarkdown } = await import('webforai');
+            return htmlToMarkdown(html, { baseUrl: url });
+        }
         case 'node-html-markdown': {
             const { NodeHtmlMarkdown } = await import('node-html-markdown');
             return NodeHtmlMarkdown.translate(html);

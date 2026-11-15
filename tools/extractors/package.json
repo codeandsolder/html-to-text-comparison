@@ -4,14 +4,15 @@
   "description": "Reproducible Node.js extractors for the Rust comparison harness",
   "version": "0.1.0",
   "dependencies": {
-    "percollate": "4.3.0",
-    "turndown": "7.2.5",
     "@mozilla/readability": "0.6.0",
-    "linkedom": "0.18.15",
     "cloakbrowser": "0.7.2",
-    "playwright-core": "1.64.1",
     "defuddle": "0.19.6",
-    "node-html-markdown": "2.0.0"
+    "linkedom": "0.18.15",
+    "node-html-markdown": "2.0.0",
+    "percollate": "4.3.0",
+    "playwright-core": "1.64.1",
+    "turndown": "7.2.5",
+    "webforai": "5.1.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
