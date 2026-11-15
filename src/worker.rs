@@ -201,6 +201,42 @@ fn wait_for_group(command: &mut Command, timeout: Duration) -> Result<GroupExit,
     }
 }
 
+/// Capture a browser/acquisition subprocess without risking a pipe deadlock.
+/// All descendants belong to the same killable process group/job object.
+pub fn run_captured_command(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let stdout_path = scratch.path().join("stdout");
+    let stderr_path = scratch.path().join("stderr");
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(
+            fs::File::create(&stdout_path).map_err(|error| error.to_string())?,
+        ))
+        .stderr(Stdio::from(
+            fs::File::create(&stderr_path).map_err(|error| error.to_string())?,
+        ))
+        .env("TMPDIR", scratch.path())
+        .env("TMP", scratch.path())
+        .env("TEMP", scratch.path());
+    let status = match wait_for_group(&mut command, timeout)? {
+        GroupExit::TimedOut => {
+            return Err(format!(
+                "browser acquisition exceeded its {}s deadline",
+                timeout.as_secs_f64()
+            ));
+        }
+        GroupExit::Exited(status) => status,
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: fs::read(stdout_path).map_err(|error| error.to_string())?,
+        stderr: fs::read(stderr_path).map_err(|error| error.to_string())?,
+    })
+}
+
 pub fn execute_isolated(
     out_dir: &Path,
     html: &str,

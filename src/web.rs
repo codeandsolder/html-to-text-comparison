@@ -97,13 +97,19 @@ async fn run_extraction(
     State(state): State<AppState>,
     Json(payload): Json<RunRequest>,
 ) -> impl IntoResponse {
-    let html = match fetch_html(&payload.url).await {
+    let html = match fetch_html(&payload.url, payload.acquisition).await {
         Ok(h) => h,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
 
     let states = state.extractor_states.read().await.clone();
-    let score = crate::scores::run_extraction(&payload.url, &html, &states, &state.score_store);
+    let score = crate::scores::run_extraction(
+        &payload.url,
+        &html,
+        payload.acquisition,
+        &states,
+        &state.score_store,
+    );
     match score {
         Ok(score) => Json(score).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
@@ -114,7 +120,7 @@ async fn run_single_extraction(
     State(state): State<AppState>,
     Json(payload): Json<SingleRunRequest>,
 ) -> impl IntoResponse {
-    let html = match fetch_html(&payload.url).await {
+    let html = match fetch_html(&payload.url, payload.acquisition).await {
         Ok(h) => h,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
@@ -133,7 +139,13 @@ async fn run_single_extraction(
         apply_extractor_config(&payload.extractor, config, entry);
     }
 
-    let score = crate::scores::run_extraction(&payload.url, &html, &states, &state.score_store);
+    let score = crate::scores::run_extraction(
+        &payload.url,
+        &html,
+        payload.acquisition,
+        &states,
+        &state.score_store,
+    );
     match score {
         Ok(score) => Json(score).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
@@ -324,9 +336,6 @@ async fn toggle_extractor(
             "markdownify" => {
                 cfg.markdownify = crate::extractor_config::MarkdownifyConfig::default();
             }
-            "lightpanda" => {
-                cfg.lightpanda = crate::extractor_config::LightpandaConfig::default();
-            }
             "webclaw" => {
                 cfg.webclaw = crate::extractor_config::WebclawConfig::default();
             }
@@ -483,13 +492,6 @@ fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut Ex
                 state.config.markdownify = cfg;
             }
         }
-        "lightpanda" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "lightpanda").clone())
-            {
-                state.config.lightpanda = cfg;
-            }
-        }
         "webclaw" => {
             if let Ok(cfg) =
                 serde_json::from_value(extractor_config_payload(config, "webclaw").clone())
@@ -562,19 +564,14 @@ async fn get_output(
     )
 }
 
-async fn fetch_html(url: &str) -> Result<String, String> {
-    let target = url.to_owned();
-    tokio::task::spawn_blocking(move || {
-        let response = ureq::get(&target).call().map_err(|e| e.to_string())?;
-        let mut html = String::new();
-        response
-            .into_reader()
-            .read_to_string(&mut html)
-            .map_err(|e| e.to_string())?;
-        Ok(html)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+async fn fetch_html(
+    url: &str,
+    acquisition: crate::acquisition::Acquisition,
+) -> Result<String, String> {
+    let parsed = url::Url::parse(url).map_err(|error| error.to_string())?;
+    tokio::task::spawn_blocking(move || acquisition.acquire(&parsed))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn load_score_source_html(
@@ -589,12 +586,16 @@ fn load_score_source_html(
 #[derive(serde::Deserialize)]
 pub struct RunRequest {
     pub url: String,
+    #[serde(default)]
+    pub acquisition: crate::acquisition::Acquisition,
 }
 
 #[derive(serde::Deserialize)]
 pub struct SingleRunRequest {
     #[serde(default)]
     pub url: String,
+    #[serde(default)]
+    pub acquisition: crate::acquisition::Acquisition,
     pub extractor: String,
     pub config: Option<serde_json::Value>,
 }

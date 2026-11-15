@@ -6,7 +6,6 @@ use scraper::{Html, Selector};
 use serde::Serialize;
 use similar::{Algorithm, DiffTag, TextDiff};
 use std::collections::HashSet;
-use std::io::Read;
 use std::sync::OnceLock;
 use url::Url;
 
@@ -183,7 +182,7 @@ fn read_sample(
     candidate: &CandidateLink,
     states: &ExtractorStates,
 ) -> Result<(usize, Vec<String>), String> {
-    let html = fetch_html(candidate.url.as_str())?;
+    let html = crate::acquisition::Acquisition::Http.acquire(&candidate.url)?;
     let markdown = markdownify_html(&html, states, &candidate.url)?;
     let lines = split_markdown_lines(&markdown);
     let normalized = lines
@@ -224,7 +223,7 @@ fn collect_candidate_links(
     let same_origin_count = same_origin.len();
     let other_http_count = other_http.len();
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     same_prefix.shuffle(&mut rng);
     same_origin.shuffle(&mut rng);
     other_http.shuffle(&mut rng);
@@ -293,16 +292,6 @@ fn parent_path_prefix(url: &Url) -> String {
         Some((parent, _)) if !parent.is_empty() => format!("{parent}/"),
         _ => "/".to_string(),
     }
-}
-
-fn fetch_html(url: &str) -> Result<String, String> {
-    let response = ureq::get(url).call().map_err(|error| error.to_string())?;
-    let mut html = String::new();
-    response
-        .into_reader()
-        .read_to_string(&mut html)
-        .map_err(|error| error.to_string())?;
-    Ok(html)
 }
 
 fn markdownify_html(

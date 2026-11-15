@@ -1,3 +1,4 @@
+mod acquisition;
 mod boilerplate;
 mod extractor_config;
 mod metrics;
@@ -31,20 +32,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(1);
         }
     } else if args.len() > 1 {
-        let (extractor, input_start) = if args[1] == "--extractor" {
-            let name = args.get(2).ok_or("--extractor requires a name")?;
-            (Some(name.as_str()), 3)
-        } else {
-            (None, 1)
-        };
-        if args.len() <= input_start {
-            return Err("missing HTML file or URL".into());
-        }
-        let input = args[input_start..].join(" ");
+        let (extractor, mut method, input) = parse_cli_args(&args[1..])?;
         let current_dir = std::env::current_dir()?;
         let out_dir = current_dir.join("out");
 
         let (html, url) = if std::path::Path::new(&input).is_file() {
+            if method != acquisition::Acquisition::Http {
+                return Err("browser acquisition requires an HTTP(S) URL, not a file".into());
+            }
+            method = acquisition::Acquisition::File;
             let html = std::fs::read_to_string(&input)?;
             let canonical = std::fs::canonicalize(&input)?;
             let url = url::Url::from_file_path(canonical)
@@ -52,9 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (html, url)
         } else {
             let url = url::Url::parse(&input)?;
-            let response = ureq::get(url.as_str()).call()?;
-            let mut html = String::new();
-            response.into_reader().read_to_string(&mut html)?;
+            let html = method.acquire(&url)?;
             (html, url)
         };
 
@@ -65,11 +59,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let html_file = out_dir.join("html.html");
         std::fs::write(&html_file, &html)?;
-        println!("HTML Size (bytes): {}", html.len());
+        println!("Acquisition: {method:?}, HTML Size (bytes): {}", html.len());
 
         let mut runner = runner::Runner::new(out_dir, html);
         let states = ExtractorStates::default();
-        let mut names: Vec<_> = if let Some(extractor) = extractor {
+        let mut names: Vec<_> = if let Some(extractor) = extractor.as_deref() {
             let known = states.states.contains_key(extractor);
             #[cfg(feature = "reader-lm-api")]
             let known = known || extractor == "reader-lm-api";
@@ -98,9 +92,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "  {} --extractor <name> <url_or_file>     Run one extractor",
             args[0]
         );
+        eprintln!("  {} --acquire {{http|lightpanda|cloakbrowser}} [--extractor NAME] <url>  One acquisition", args[0]);
         eprintln!("  {} --server [port]   Start web server", args[0]);
         eprintln!();
         eprintln!("Web server mode: {} --server 3000", args[0]);
     }
     Ok(())
+}
+
+fn parse_cli_args(
+    arguments: &[String],
+) -> Result<(Option<String>, acquisition::Acquisition, String), Box<dyn std::error::Error>> {
+    let mut extractor: Option<String> = None;
+    let mut method = acquisition::Acquisition::Http;
+    let mut input = None;
+    let mut words = arguments.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--extractor" => {
+                extractor = Some(words.next().ok_or("--extractor requires a name")?.clone());
+            }
+            "--acquire" => {
+                method = match words
+                    .next()
+                    .ok_or("--acquire requires http, lightpanda, or cloakbrowser")?
+                    .as_str()
+                {
+                    "http" => acquisition::Acquisition::Http,
+                    "lightpanda" => acquisition::Acquisition::Lightpanda,
+                    "cloakbrowser" => acquisition::Acquisition::Cloakbrowser,
+                    other => return Err(format!("unsupported acquisition mode: {other}").into()),
+                };
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown option: {other}").into())
+            }
+            other if input.is_none() => input = Some(other.to_string()),
+            _ => return Err("only one page or file can be acquired per run".into()),
+        }
+    }
+    let input = input.ok_or("missing HTML file or URL")?;
+    Ok((extractor, method, input))
 }

@@ -5,9 +5,10 @@ use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
+use crate::acquisition::Acquisition;
 use crate::extractor_config::{
-    ExtractorStates, Html2TextPythonConfig, HtmlToMarkdownGoConfig, LightpandaConfig,
-    MarkdownifyConfig, PercollateConfig, TrafilaturaConfig, TurndownConfig, DEFAULT_SKIP_TAGS,
+    ExtractorStates, Html2TextPythonConfig, HtmlToMarkdownGoConfig, MarkdownifyConfig,
+    PercollateConfig, TrafilaturaConfig, TurndownConfig, DEFAULT_SKIP_TAGS,
 };
 use crate::runner::{ExtractionStatus, Runner};
 
@@ -15,6 +16,7 @@ use crate::runner::{ExtractionStatus, Runner};
 pub struct Score {
     pub id: String,
     pub url: String,
+    pub acquisition: Acquisition,
     pub html_size: usize,
     pub timestamp: String,
     #[serde(default)]
@@ -57,6 +59,7 @@ impl Score {
     pub fn new(
         url: String,
         html: String,
+        acquisition: Acquisition,
         states: &ExtractorStates,
         store: &ScoreStore,
     ) -> Result<Self, String> {
@@ -101,6 +104,7 @@ impl Score {
         let result_record = Self {
             id,
             url,
+            acquisition,
             html_size,
             timestamp,
             source_html_file: source_html_file.display().to_string(),
@@ -303,7 +307,7 @@ pub fn run_named_extractor(
             runner.run(output_name, move |html| {
                 Ok(mdka::html_to_markdown_with(
                     html,
-                    &cfg.into_conversion_options(),
+                    &cfg.into_conversion_options()?,
                 ))
             });
         }
@@ -375,18 +379,16 @@ pub fn run_named_extractor(
                     html_to_markdown,
                     types::{
                         CleanConfig, ExtractionConfig, FilterConfig, FrontmatterConfig,
-                        HTMLToMarkdownOptions, IsolateMainConfig, PluginConfig, TailwindConfig,
+                        HtmlToMarkdownOptions, IsolateMainConfig, PluginConfig, TailwindConfig,
                     },
                 };
-                let mut opts = HTMLToMarkdownOptions::default();
+                let mut opts = HtmlToMarkdownOptions::default();
                 if !cfg.origin.is_empty() {
                     opts.origin = Some(cfg.origin.clone());
                 }
-                opts.clean_urls = cfg.clean_urls;
                 if cfg.clean_urls
                     || cfg.clean_fragments
                     || cfg.clean_empty_links
-                    || cfg.clean_blank_lines
                     || cfg.clean_redundant_links
                     || cfg.clean_self_link_headings
                     || cfg.clean_empty_images
@@ -396,7 +398,6 @@ pub fn run_named_extractor(
                         urls: cfg.clean_urls,
                         fragments: cfg.clean_fragments,
                         empty_links: cfg.clean_empty_links,
-                        blank_lines: cfg.clean_blank_lines,
                         redundant_links: cfg.clean_redundant_links,
                         self_link_headings: cfg.clean_self_link_headings,
                         empty_images: cfg.clean_empty_images,
@@ -438,7 +439,7 @@ pub fn run_named_extractor(
                         });
                     }
                     if cfg.isolate_main {
-                        plugins.isolate_main = Some(IsolateMainConfig::default());
+                        plugins.isolate_main = Some(IsolateMainConfig);
                     }
                     if cfg.frontmatter {
                         plugins.frontmatter = Some(FrontmatterConfig {
@@ -448,7 +449,7 @@ pub fn run_named_extractor(
                         });
                     }
                     if cfg.tailwind {
-                        plugins.tailwind = Some(TailwindConfig::default());
+                        plugins.tailwind = Some(TailwindConfig);
                     }
                     if !cfg.extraction_selectors.is_empty() {
                         plugins.extraction = Some(ExtractionConfig {
@@ -537,6 +538,7 @@ pub fn compare_single_extractor_settings(
     let score = Score {
         id,
         url: url.to_string(),
+        acquisition: Acquisition::SavedSnapshot,
         html_size,
         timestamp,
         source_html_file: source_html_file.display().to_string(),
@@ -601,10 +603,17 @@ fn single_extractor_state(
 pub fn run_extraction(
     url: &str,
     html: &str,
+    acquisition: Acquisition,
     states: &ExtractorStates,
     score_store: &ScoreStore,
 ) -> Result<Score, String> {
-    let score = Score::new(url.to_string(), html.to_string(), states, score_store)?;
+    let score = Score::new(
+        url.to_string(),
+        html.to_string(),
+        acquisition,
+        states,
+        score_store,
+    )?;
     if let Err(error) = score_store.save(&score) {
         let _ = score_store.remove_artifacts(&score.id);
         return Err(error);
@@ -658,19 +667,16 @@ pub fn run_cli_extractor(
                 .get("html2text-py")
                 .map_or_default(|s| s.config.html2text_py.clone()),
         ),
+        "mozilla-readability" => run_mozilla_readability(html),
+        "defuddle" | "node-html-markdown" => {
+            run_node_snapshot_parser(extractor_key, html, parsed_url)
+        }
         "markdownify" => run_markdownify(
             html,
             &states
                 .states
                 .get("markdownify")
                 .map_or_default(|s| s.config.markdownify.clone()),
-        ),
-        "lightpanda" => run_lightpanda(
-            parsed_url,
-            &states
-                .states
-                .get("lightpanda")
-                .map_or_default(|s| s.config.lightpanda.clone()),
         ),
         "webclaw" => run_webclaw(html, states),
         "e2m" => run_e2m(html, states),
@@ -686,12 +692,18 @@ pub fn run_cli_extractor(
         "reader-lm-api" => {
             let key = std::env::var("JINA_API_KEY")
                 .map_err(|error| format!("reader-lm-api missing API key: {error}"))?;
-            let response = ureq::get(&format!("https://r.jina.ai/{parsed_url}"))
-                .set("authorization", &format!("Bearer {key}"))
-                .call()
+            // Jina accepts the acquired HTML. The original URL is only a
+            // base for relative links; sending it alone would re-fetch the site.
+            let response = ureq::post("https://r.jina.ai/")
+                .header("authorization", &format!("Bearer {key}"))
+                .send_json(serde_json::json!({
+                    "html": html,
+                    "url": parsed_url.as_str()
+                }))
                 .map_err(|error| format!("reader-lm-api request failed: {error}"))?;
             let mut body = String::new();
             response
+                .into_body()
                 .into_reader()
                 .read_to_string(&mut body)
                 .map_err(|error| format!("reader-lm-api read failed: {error}"))?;
@@ -790,12 +802,12 @@ fn build_percollate_args(input_path: &std::path::Path, cfg: &PercollateConfig) -
             .display()
             .to_string(),
         "md".to_string(),
+        "--no-amp".to_string(),
         "-o".to_string(),
         "-".to_string(),
     ];
-    if cfg.inline_images {
-        args.push("--inline".to_string());
-    }
+    // Never fetch image resources from the original site.
+    // Percollate consumes the captured HTML snapshot only.
     args.push(if cfg.hyphenate {
         "--hyphenate".to_string()
     } else {
@@ -836,6 +848,41 @@ fn run_percollate(html: &str, cfg: &PercollateConfig) -> Result<String, String> 
     command_output_text(out, "percollate")
 }
 
+fn run_node_snapshot_parser(kind: &str, html: &str, url: &url::Url) -> Result<String, String> {
+    let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+    std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tools/extractors/snapshot-parsers.mjs");
+    let output = std::process::Command::new("node")
+        .arg(script)
+        .arg(kind)
+        .arg(input.path())
+        .arg(url.as_str())
+        .output();
+    command_output_text(output, kind)
+}
+
+/// The original Mozilla Readability JS implementation. The DOM is built
+/// from the *acquired HTML snapshot*; no browser navigation or website fetch.
+fn run_mozilla_readability(html: &str) -> Result<String, String> {
+    let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+    std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
+    let script = r"const fs = require('fs'); const {parseHTML} = require('linkedom'); const {Readability} = require('@mozilla/readability'); const html = fs.readFileSync(process.argv[1], 'utf8'); const {document} = parseHTML(html); const result = new Readability(document).parse(); if (!result) { console.error('No readable content'); process.exit(2); } process.stdout.write(result.textContent || '')";
+    let out = std::process::Command::new("node")
+        .env("NODE_PATH", extractor_node_modules())
+        .args(["-e", script])
+        .arg(input.path())
+        .output();
+    command_output_text(out, "mozilla-readability")
+}
+
+fn python_requirements(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tools/extractors/python")
+        .join(name)
+        .join("requirements.txt")
+}
+
 fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("trafilatura_{}.html", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, html)
@@ -844,16 +891,9 @@ fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> Result<String, String
         .map_err(|error| format!("serializing configuration: {error}"))?;
     let script = r"import json, sys, trafilatura; cfg = json.loads(sys.argv[2]); html = open(sys.argv[1]).read(); result = trafilatura.extract(html, output_format='markdown', favor_precision=cfg['favor_precision'], favor_recall=cfg['favor_recall'], include_comments=cfg['include_comments'], include_tables=cfg['include_tables'], include_images=cfg['include_images'], include_formatting=cfg['include_formatting'], include_links=cfg['include_links'], deduplicate=cfg['deduplicate'], with_metadata=cfg['with_metadata']); print(result if result else '', end='')";
     let out = std::process::Command::new("uv")
-        .args([
-            "run",
-            "--no-project",
-            "--with",
-            "trafilatura==2.3.1",
-            "--",
-            "python3",
-            "-c",
-            script,
-        ])
+        .args(["run", "--no-project", "--with-requirements"])
+        .arg(python_requirements("trafilatura"))
+        .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
         .output();
@@ -870,16 +910,9 @@ fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> Result<String, S
         .map_err(|error| format!("serializing configuration: {error}"))?;
     let script = r"from html2text import HTML2Text; import json, sys; cfg = json.loads(sys.argv[2]); h = HTML2Text(); h.ignore_links = cfg['ignore_links']; h.ignore_images = cfg['ignore_images']; h.ignore_emphasis = cfg['ignore_emphasis']; h.body_width = cfg['body_width']; h.unicode_snob = cfg['unicode_snob']; h.escape_snob = cfg['escape_snob']; h.inline_links = cfg['inline_links']; h.google_doc = cfg['google_doc']; h.dash_unordered_list = cfg['dash_unordered_list']; html = open(sys.argv[1]).read(); print(h.handle(html), end='')";
     let out = std::process::Command::new("uv")
-        .args([
-            "run",
-            "--no-project",
-            "--with",
-            "html2text==2025.4.15",
-            "--",
-            "python3",
-            "-c",
-            script,
-        ])
+        .args(["run", "--no-project", "--with-requirements"])
+        .arg(python_requirements("html2text"))
+        .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
         .output();
@@ -992,50 +1025,15 @@ fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> Result<String, String
         .map_err(|error| format!("markdownify configuration invalid: {error}"))?;
     let script = r"from markdownify import markdownify as md; import json, sys; cfg = json.loads(sys.argv[2]); kwargs = {'autolinks': cfg['autolinks'], 'default_title': cfg['default_title'], 'heading_style': cfg['heading_style'], 'bullets': cfg['bullets'], 'strong_em_symbol': cfg['strong_em_symbol'], 'sub_symbol': cfg['sub_symbol'], 'sup_symbol': cfg['sup_symbol'], 'newline_style': cfg['newline_style'], 'code_language': cfg['code_language'], 'escape_asterisks': cfg['escape_asterisks'], 'escape_underscores': cfg['escape_underscores'], 'escape_misc': cfg['escape_misc'], 'keep_inline_images_in': cfg['keep_inline_images_in'], 'table_infer_header': cfg['table_infer_header'], 'wrap': cfg['wrap'], 'wrap_width': cfg['wrap_width']}; html = open(sys.argv[1]).read(); strip = cfg['strip']; convert = cfg['convert']; strip_document = cfg['strip_document']; strip_pre = cfg['strip_pre']; bs4_options = cfg['bs4_options']; kwargs['strip'] = strip if strip else None; kwargs['convert'] = convert if convert else None; kwargs['strip_document'] = strip_document; kwargs['strip_pre'] = strip_pre; kwargs['bs4_options'] = bs4_options; kwargs = {key: value for key, value in kwargs.items() if value is not None}; print(md(html, **kwargs), end='')";
     let out = std::process::Command::new("uv")
-        .args([
-            "run",
-            "--no-project",
-            "--with",
-            "markdownify==1.2.3",
-            "--",
-            "python3",
-            "-c",
-            script,
-        ])
+        .args(["run", "--no-project", "--with-requirements"])
+        .arg(python_requirements("markdownify"))
+        .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
         .output();
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "markdownify")
-}
-
-fn build_lightpanda_args(parsed_url: &url::Url, cfg: &LightpandaConfig) -> Vec<String> {
-    let mut args = vec![
-        "exec".to_string(),
-        "lightpanda".to_string(),
-        "lightpanda".to_string(),
-        "fetch".to_string(),
-        "--dump".to_string(),
-        "markdown".to_string(),
-    ];
-    if !cfg.wait_until.is_empty() {
-        args.push("--wait-until".to_string());
-        args.push(cfg.wait_until.clone());
-    }
-    if cfg.wait_ms > 0 {
-        args.push("--wait-ms".to_string());
-        args.push(cfg.wait_ms.to_string());
-    }
-    args.push(parsed_url.to_string());
-    args
-}
-
-fn run_lightpanda(parsed_url: &url::Url, cfg: &LightpandaConfig) -> Result<String, String> {
-    let args = build_lightpanda_args(parsed_url, cfg);
-    let out = std::process::Command::new("docker").args(&args).output();
-
-    command_output_text(out, "lightpanda")
 }
 
 fn run_webclaw(html: &str, states: &ExtractorStates) -> Result<String, String> {
@@ -1164,13 +1162,10 @@ fn run_e2m(html: &str, states: &ExtractorStates) -> Result<String, String> {
             "--no-project",
             "--python",
             "3.12",
-            "--with",
-            "wisup-e2m==0.1.61",
-            "--",
-            "python3",
-            "-c",
-            script,
+            "--with-requirements",
         ])
+        .arg(python_requirements("e2m"))
+        .args(["--", "python3", "-c", script])
         .arg(&work_dir)
         .arg(&tmp)
         .args([
@@ -1440,8 +1435,7 @@ impl ScoreStore {
 mod tests {
     use super::*;
     use crate::extractor_config::{
-        ExtractorConfig, HtmdConfig, Html2TextConfig, HtmlToMarkdownGoConfig, LightpandaConfig,
-        PercollateConfig,
+        ExtractorConfig, HtmdConfig, Html2TextConfig, HtmlToMarkdownGoConfig, PercollateConfig,
     };
 
     fn test_store() -> Result<(ScoreStore, PathBuf), String> {
@@ -1462,6 +1456,7 @@ mod tests {
         let run = run_extraction(
             "https://example.com/article",
             "<h1>Saved exactly once</h1>",
+            Acquisition::File,
             &states,
             &repository,
         )?;
@@ -1490,7 +1485,13 @@ mod tests {
 
         let mut ids = Vec::new();
         for _ in 0..3 {
-            let run = run_extraction("https://example.com/", "one", &states, &repository)?;
+            let run = run_extraction(
+                "https://example.com/",
+                "one",
+                Acquisition::File,
+                &states,
+                &repository,
+            )?;
             ids.push(run.id);
         }
         let saved = repository.list()?;
@@ -1916,11 +1917,22 @@ mod tests {
     }
 
     #[test]
+    fn mozilla_readability_extracts_captured_html() -> Result<(), Box<dyn std::error::Error>> {
+        let body = "Readability operates on one HTML snapshot. ".repeat(24);
+        let html = format!(
+            "<html><head><title>Fixture</title></head><body><article><h1>Article title</h1><p>{body}</p></article><nav>Discard me</nav></body></html>"
+        );
+        let result = run_mozilla_readability(&html)?;
+        assert!(result.contains("Readability operates on one HTML snapshot"));
+        assert!(!result.contains("Discard me"));
+        Ok(())
+    }
+
+    #[test]
     fn build_percollate_args_respects_config() {
         let args = build_percollate_args(
             std::path::Path::new("/tmp/input.html"),
             &PercollateConfig {
-                inline_images: true,
                 hyphenate: false,
                 fences: false,
                 fence: "~~~".to_string(),
@@ -1931,7 +1943,8 @@ mod tests {
             },
         );
 
-        assert!(args.iter().any(|arg| arg == "--inline"));
+        assert!(!args.iter().any(|arg| arg == "--inline"));
+        assert!(args.iter().any(|arg| arg == "--no-amp"));
         assert!(args.iter().any(|arg| arg == "--no-hyphenate"));
         assert!(args.iter().any(|arg| arg == "--md.fences=false"));
         assert!(args.iter().any(|arg| arg == "--md.fence=~"));
@@ -1982,31 +1995,6 @@ mod tests {
         assert_eq!(payload["strip_document"], serde_json::Value::Null);
         assert_eq!(payload["strip_pre"], serde_json::json!("strip_one"));
         assert_eq!(payload["bs4_options"], serde_json::json!("lxml"));
-        Ok(())
-    }
-
-    #[test]
-    fn build_lightpanda_args_respects_wait_config() -> Result<(), Box<dyn std::error::Error>> {
-        let url = url::Url::parse("https://example.com/article")?;
-        let args = build_lightpanda_args(
-            &url,
-            &LightpandaConfig {
-                wait_until: "networkidle".to_string(),
-                wait_ms: 2500,
-                ..Default::default()
-            },
-        );
-
-        assert!(args
-            .windows(2)
-            .any(|window| window == ["--wait-until", "networkidle"]));
-        assert!(args
-            .windows(2)
-            .any(|window| window == ["--wait-ms", "2500"]));
-        assert_eq!(
-            args.last().ok_or("missing final URL argument")?,
-            "https://example.com/article"
-        );
         Ok(())
     }
 

@@ -28,10 +28,20 @@ Install pinned Node extractor packages once (Python tools are managed through `u
 ```sh
 PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts --no-audit --no-fund
 cargo run --release -- --extractor nanohtml2text example.html
-cargo run --release -- https://example.com
+cargo run --release -- --acquire http https://example.com
+cargo run --release -- --acquire lightpanda https://example.com
+cargo run --release -- --acquire cloakbrowser https://example.com
 ```
 
-CLI results are written to `out/`. Every converter uses the same registry as the web UI and runs in its own killable process group. You can select a single extractor with `--extractor NAME`. Check the resulting text for missing, unwanted or misleading content; a short output is not necessarily a good output.
+CLI results are written to `out/`. Each invocation acquires **one immutable HTML snapshot** (HTTP or an explicitly selected Lightpanda/CloakBrowser navigation) and runs every enabled converter against those identical bytes. Lightpanda and CloakBrowser are **alternative acquisition backends, not additional extractors that revisit the site**. Optional Jina Reader receives the captured HTML in a POST instead of a URL-only refetch. Boilerplate analysis intentionally samples distinct linked pages, once each within that analysis. Every converter uses the same registry as the web UI and runs in its own killable process group. You can select a single extractor with `--extractor NAME`. Check the resulting text for missing, unwanted or misleading content; a short output is not necessarily a good output.
+
+### Dependency maintenance and additional extractors
+
+Renovate uses the shared [codeandsolder CI fleet policy](https://github.com/codeandsolder/ci-workflows/blob/main/renovate-fleet.json) to maintain Cargo, npm, pip-style requirement files, GitHub Actions SHA pins, the pinned CI `uv` bootstrap and the `diff` browser CDN version. Python extractors run via individual `tools/extractors/python/*/requirements.txt` files, so dependency upgrades stay independently reproducible. Major updates require review and tests; `wisup-e2m` requires the heavyweight release-tier integration test.
+
+The comparison includes **Mozilla's upstream Readability JavaScript implementation** through `@mozilla/readability` + `linkedom`, **Defuddle** in strictly offline mode, and **node-html-markdown** as a fast full-document baseline. All three use the same captured bytes as the Rust/Python converters.
+
+CloakBrowser uses its Playwright-compatible Node wrapper and custom Chromium binary. The browser must be activated separately (e.g. `npx cloakbrowser login` or `CLOAKBROWSER_LICENSE_KEY`), and the first launch may download its signed browser build (~200 MB). This activation and download are prerequisites for a live CloakBrowser run, not steps performed by the benchmark. Both browser backends use a configurable process-group deadline, `HTML_TO_TEXT_ACQUIRE_TIMEOUT_MS` (default 120,000 ms). HTTP acquisition is always available without a browser.
 
 ### Web UI and storage
 
