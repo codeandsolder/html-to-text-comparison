@@ -16,6 +16,13 @@
       "matchManagers": ["npm"],
       "matchPackageNames": ["@mozilla/readability", "linkedom", "defuddle", "cloakbrowser", "playwright-core", "node-html-markdown"],
       "automerge": false
+    },
+    {
+      "description": "CloakBrowser 0.7.2 requires playwright-core <1.65; block incompatible updates",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["playwright-core"],
+      "allowedVersions": "<1.65.0",
+      "automerge": false
     }
   ],
   "customManagers": [
