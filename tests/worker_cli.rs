@@ -88,3 +88,38 @@ fn http_capture_is_acquired_once_for_extraction() -> Result<(), Box<dyn std::err
     assert!(saved.contains("Acquired once"));
     Ok(())
 }
+
+#[test]
+fn node_snapshot_parsers_run_through_real_worker_without_fetching(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = tempfile::tempdir()?;
+    let source = workspace.path().join("fixture.html");
+    let article = "An immutable HTML snapshot is shared across all converters. ".repeat(24);
+    fs::write(
+        &source,
+        format!(
+            "<!doctype html><html><head><title>Fixture</title></head><body><nav>Unrelated navigation</nav><article><h1>Benchmark</h1><p>{article}</p></article></body></html>"
+        ),
+    )?;
+    for name in ["defuddle", "node-html-markdown"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_html-to-text-comparison"))
+            .args(["--extractor", name])
+            .arg(&source)
+            .current_dir(workspace.path())
+            .output()?;
+        assert!(
+            result.status.success(),
+            "{name} failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let output = fs::read_to_string(workspace.path().join("out").join(format!("{name}.txt")))?;
+        assert!(
+            output.contains("An immutable HTML snapshot"),
+            "{name} lost the source article"
+        );
+        if name == "defuddle" {
+            assert!(!output.contains("Unrelated navigation"));
+        }
+    }
+    Ok(())
+}

@@ -26,6 +26,7 @@ jobs:
         "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.8"
         export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
         PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts --no-audit --no-fund
+        npm test --prefix tools/extractors
         uv run --no-project --with-requirements tools/extractors/python/trafilatura/requirements.txt -- python3 -c 'import trafilatura'
         cargo test --locked --all-targets --all-features -- --skip scores::tests::e2m_handles_images_without_image_paths
 

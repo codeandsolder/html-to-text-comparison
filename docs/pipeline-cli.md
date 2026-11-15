@@ -5,9 +5,9 @@ This page documents the current tool boundary. Source of truth: `src/scores.rs` 
 ## Execution path
 
 1. CLI (`--extractor NAME` or all) and web select extractors using the same `run_named_extractor` dispatch.
-2. The root page was acquired once using HTTP or an explicitly selected Lightpanda browser navigation. The resulting HTML snapshot is identical for every converter. Jina Reader receives that HTML by POST, and Percollate is configured without AMP-alternate refetches or remote image inlining.
+2. The root page was acquired once using HTTP or an explicitly selected Lightpanda or CloakBrowser navigation. The resulting HTML snapshot is identical for every converter. Jina Reader receives that HTML by POST, and Percollate is configured without AMP-alternate refetches or remote image inlining.
 3. The parent serializes the exact HTML snapshot, URL, extractor identity, settings and destination directory to private temporary IPC files.
-4. A separate instance of the application receives `--extract-worker` and runs exactly one extractor. That worker may spawn Node/Python/Go/Lightpanda subprocesses.
+4. A separate instance of the application receives `--extract-worker` and runs exactly one extractor. That worker may spawn Node/Python/Go subprocesses. Browsers only run in the earlier acquisition stage.
 5. The parent monitors a Unix process group or Windows Job Object. The per-extractor deadline applies to the entire child process group; expiration terminates descendants and reaps the leader.
 6. The worker emits a typed result with `Success`, `NoContent`, `Failed`, `TimedOut` or `Panicked` and a human-readable diagnostic. The parent validates the output, records end-to-end time and deletes IPC/scratch files, including after timeouts.
 
@@ -22,6 +22,8 @@ The Rust converter contract is `Result<String, String>`. A text document beginni
 | Trafilatura | `uv run --no-project --with-requirements tools/extractors/python/trafilatura/requirements.txt` | HTML scratch file and JSON flags |
 | html2text-py | `uv run --no-project --with-requirements tools/extractors/python/html2text/requirements.txt` | HTML scratch file and JSON flags |
 | Markdownify | `uv run --no-project --with-requirements tools/extractors/python/markdownify/requirements.txt` | HTML scratch file and serialized options |
+| Defuddle | `node tools/extractors/snapshot-parsers.mjs defuddle` | Snapshot file and original URL; `defuddle/node` with `useAsync:false`, never remote fallback |
+| node-html-markdown | `node tools/extractors/snapshot-parsers.mjs node-html-markdown` | Local full-document conversion, no fetching |
 | Mozilla Readability | `node -e` with `@mozilla/readability` + `linkedom` | Local HTML file; full upstream JS algorithm, no navigation |
 | Webclaw | `webclaw` or `HTML_TO_TEXT_WEBCLAW_BIN` | Temporary HTML file plus configured CLI arguments |
 | E2M | `uv run --no-project --python 3.12 --with-requirements tools/extractors/python/e2m/requirements.txt` | HTML scratch file, language/engine/processing flags; release-tier integration test |

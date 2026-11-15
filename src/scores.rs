@@ -668,6 +668,9 @@ pub fn run_cli_extractor(
                 .map_or_default(|s| s.config.html2text_py.clone()),
         ),
         "mozilla-readability" => run_mozilla_readability(html),
+        "defuddle" | "node-html-markdown" => {
+            run_node_snapshot_parser(extractor_key, html, parsed_url)
+        }
         "markdownify" => run_markdownify(
             html,
             &states
@@ -843,6 +846,20 @@ fn run_percollate(html: &str, cfg: &PercollateConfig) -> Result<String, String> 
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "percollate")
+}
+
+fn run_node_snapshot_parser(kind: &str, html: &str, url: &url::Url) -> Result<String, String> {
+    let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+    std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tools/extractors/snapshot-parsers.mjs");
+    let output = std::process::Command::new("node")
+        .arg(script)
+        .arg(kind)
+        .arg(input.path())
+        .arg(url.as_str())
+        .output();
+    command_output_text(output, kind)
 }
 
 /// The original Mozilla Readability JS implementation. The DOM is built

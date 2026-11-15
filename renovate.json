@@ -14,7 +14,7 @@
     {
       "description": "JS extraction engine and DOM dependencies must pass real content comparisons",
       "matchManagers": ["npm"],
-      "matchPackageNames": ["@mozilla/readability", "linkedom", "defuddle"],
+      "matchPackageNames": ["@mozilla/readability", "linkedom", "defuddle", "cloakbrowser", "playwright-core", "node-html-markdown"],
       "automerge": false
     }
   ],

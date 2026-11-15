@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "  {} --extractor <name> <url_or_file>     Run one extractor",
             args[0]
         );
-        eprintln!("  {} --acquire lightpanda [--extractor NAME] <url>  Browser acquisition, one navigation", args[0]);
+        eprintln!("  {} --acquire {{http|lightpanda|cloakbrowser}} [--extractor NAME] <url>  One acquisition", args[0]);
         eprintln!("  {} --server [port]   Start web server", args[0]);
         eprintln!();
         eprintln!("Web server mode: {} --server 3000", args[0]);
@@ -115,11 +115,12 @@ fn parse_cli_args(
             "--acquire" => {
                 method = match words
                     .next()
-                    .ok_or("--acquire requires http or lightpanda")?
+                    .ok_or("--acquire requires http, lightpanda, or cloakbrowser")?
                     .as_str()
                 {
                     "http" => acquisition::Acquisition::Http,
                     "lightpanda" => acquisition::Acquisition::Lightpanda,
+                    "cloakbrowser" => acquisition::Acquisition::Cloakbrowser,
                     other => return Err(format!("unsupported acquisition mode: {other}").into()),
                 };
             }

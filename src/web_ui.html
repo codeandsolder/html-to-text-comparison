@@ -530,7 +530,7 @@
                     <div class="url-row">
                         <input type="text" id="urlInput" placeholder="Enter URL to fetch and extract..." style="flex: 1 1 460px;">
                         <label for="acquisitionMode">Acquire with</label>
-                        <select id="acquisitionMode"><option value="http">HTTP snapshot</option><option value="lightpanda">Lightpanda rendered HTML</option></select>
+                        <select id="acquisitionMode"><option value="http">HTTP snapshot</option><option value="lightpanda">Lightpanda rendered HTML</option><option value="cloakbrowser">CloakBrowser rendered HTML</option></select>
                         <button id="runBtn" onclick="runExtraction()">Run All Enabled</button>
                     </div>
                     <div id="status" class="status"></div>
@@ -622,7 +622,7 @@
             throw new Error('Failed to load diff library: expected window.Diff from jsdiff');
         }
 
-        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','e2m','fast_html2md','html2md','html2md-rs','html2text','html2text-py','html-to-markdown-go','htmd','llm_readability','markdownify','mdka','mdream','mozilla-readability','nanohtml2text','percollate','readability','readable-readability','trafilatura','turndown','webclaw'];
+        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','defuddle','e2m','fast_html2md','html2md','html2md-rs','html2text','html2text-py','html-to-markdown-go','htmd','llm_readability','markdownify','mdka','mdream','mozilla-readability','nanohtml2text','node-html-markdown','percollate','readability','readable-readability','trafilatura','turndown','webclaw'];
         const CONFIG_FIELDS = {
             html2text: [
                 {name:'max_wrap_width',type:'number'},{name:'min_wrap_width',type:'number'},
