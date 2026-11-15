@@ -63,7 +63,7 @@ impl Score {
         states: &ExtractorStates,
         store: &ScoreStore,
     ) -> Result<Self, String> {
-        let id = Uuid::new_v4().to_string();
+        let id = Uuid::now_v7().to_string();
         let timestamp = chrono_lite_now();
         let html_size = html.len();
         let parsed_url = url::Url::parse(&url).map_err(|error| error.to_string())?;
@@ -483,7 +483,7 @@ pub fn compare_single_extractor_settings(
     let baseline_states = single_extractor_state(extractor, baseline_config);
     let candidate_states = single_extractor_state(extractor, candidate_config);
 
-    let id = Uuid::new_v4().to_string();
+    let id = Uuid::now_v7().to_string();
     let timestamp = chrono_lite_now();
     let html_size = html.len();
     let parsed_url = url::Url::parse(url).map_err(|error| error.to_string())?;
@@ -1295,6 +1295,7 @@ impl Drop for OwnedRunDir {
 pub struct ScoreStore {
     dir: PathBuf,
     max_saved_runs: usize,
+    metadata_lock: std::sync::Arc<std::sync::Mutex<()>>,
 }
 
 impl ScoreStore {
@@ -1306,14 +1307,22 @@ impl ScoreStore {
         Ok(Self {
             dir,
             max_saved_runs,
+            metadata_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
         })
+    }
+
+    fn lock_metadata(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+        self.metadata_lock
+            .lock()
+            .map_err(|error| format!("score metadata lock poisoned: {error}"))
     }
 
     /// Retention is count-bounded and deterministic. Metadata and every artifact
     /// directory are removed together, even if the run used zero extractors.
     pub fn prune(&self) -> Result<(), String> {
-        for score in self.list()?.iter().skip(self.max_saved_runs) {
-            self.delete(&score.id)?;
+        let _lock = self.lock_metadata()?;
+        for score in self.list_unlocked()?.iter().skip(self.max_saved_runs) {
+            self.delete_unlocked(&score.id)?;
         }
         // Completed runs without metadata can only be leftovers from an
         // interrupted process. Delay cleanup past the maximum supported
@@ -1391,6 +1400,11 @@ impl ScoreStore {
     }
 
     pub fn save(&self, score: &Score) -> Result<(), String> {
+        let _lock = self.lock_metadata()?;
+        self.save_unlocked(score)
+    }
+
+    fn save_unlocked(&self, score: &Score) -> Result<(), String> {
         let path = self.dir.join(format!(
             "{}.json",
             Uuid::parse_str(&score.id).map_err(|error| format!("invalid score ID: {error}"))?
@@ -1406,6 +1420,11 @@ impl ScoreStore {
     }
 
     pub fn load(&self, id: &str) -> Result<Score, String> {
+        let _lock = self.lock_metadata()?;
+        self.load_unlocked(id)
+    }
+
+    fn load_unlocked(&self, id: &str) -> Result<Score, String> {
         let id = Uuid::parse_str(id).map_err(|error| format!("invalid score ID: {error}"))?;
         let path = self.dir.join(format!("{id}.json"));
         let s = read_to_string(path).map_err(|e| e.to_string())?;
@@ -1413,13 +1432,26 @@ impl ScoreStore {
     }
 
     pub fn update_grade(&self, id: &str, extractor: &str, grade: u8) -> Result<Score, String> {
-        let mut score = self.load(id)?;
+        let _lock = self.lock_metadata()?;
+        let mut score = self.load_unlocked(id)?;
+        if !score
+            .extractor_results
+            .iter()
+            .any(|result| result.name == extractor)
+        {
+            return Err(format!("extractor not found in score: {extractor}"));
+        }
         score.grades.insert(extractor.to_string(), grade);
-        self.save(&score)?;
+        self.save_unlocked(&score)?;
         Ok(score)
     }
 
     pub fn list(&self) -> Result<Vec<Score>, String> {
+        let _lock = self.lock_metadata()?;
+        self.list_unlocked()
+    }
+
+    fn list_unlocked(&self) -> Result<Vec<Score>, String> {
         let mut scores = Vec::new();
         for entry in fs::read_dir(&self.dir).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
@@ -1437,6 +1469,11 @@ impl ScoreStore {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
+        let _lock = self.lock_metadata()?;
+        self.delete_unlocked(id)
+    }
+
+    fn delete_unlocked(&self, id: &str) -> Result<(), String> {
         let id = Uuid::parse_str(id).map_err(|error| format!("invalid score ID: {error}"))?;
         let path = self.dir.join(format!("{id}.json"));
         if !path.is_file() {
@@ -1487,6 +1524,91 @@ mod tests {
         assert!(repository.list()?.is_empty());
         assert!(!repository.artifact_dir(&run.id)?.exists());
         assert!(repository.delete("../outside").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn recent_runs_survive_same_second_retention() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let store = ScoreStore::with_retention(temp.path().join("scores"), 1)?;
+        let mut states = ExtractorStates::default();
+        for entry in states.states.values_mut() {
+            entry.enabled = false;
+        }
+        let first = run_extraction(
+            "https://example.com/",
+            "<h1>first</h1>",
+            Acquisition::File,
+            &states,
+            &store,
+        )?;
+        let second = run_extraction(
+            "https://example.com/",
+            "<h1>second</h1>",
+            Acquisition::File,
+            &states,
+            &store,
+        )?;
+        assert_eq!(
+            first.timestamp, second.timestamp,
+            "fixture should exercise same-second ordering"
+        );
+        let saved = store.list()?;
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].id, second.id);
+        assert!(store.load(&first.id).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_grades_do_not_overwrite_each_other() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let repository = ScoreStore::with_retention(temp.path().join("scores"), 8)?;
+        let mut states = ExtractorStates::default();
+        for entry in states.states.values_mut() {
+            entry.enabled = false;
+        }
+        let mut score = Score::new(
+            "https://example.com/".to_string(),
+            "<h1>fixture</h1>".to_string(),
+            Acquisition::File,
+            &states,
+            &repository,
+        )?;
+        for name in ["alpha", "beta"] {
+            score.extractor_results.push(ExtractorResult {
+                name: name.to_string(),
+                extractor_key: name.to_string(),
+                output_size: 0,
+                reduction_percent: None,
+                time_micros: 0,
+                wall_time_micros: 0,
+                status: ExtractionStatus::NoContent,
+                error: String::new(),
+                output_file: String::new(),
+            });
+        }
+        repository.save(&score)?;
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let mut jobs = Vec::new();
+        for (name, grade) in [("alpha", 3), ("beta", 7)] {
+            let repository = repository.clone();
+            let gate = gate.clone();
+            let id = score.id.clone();
+            jobs.push(std::thread::spawn(move || {
+                gate.wait();
+                repository.update_grade(&id, name, grade)
+            }));
+        }
+        gate.wait();
+        for job in jobs {
+            let updated = job.join().map_err(|_| "grade thread panicked")?;
+            assert!(updated.is_ok(), "failed concurrent grading: {updated:?}");
+        }
+        let after = repository.load(&score.id)?;
+        assert_eq!(after.grades.get("alpha"), Some(&3));
+        assert_eq!(after.grades.get("beta"), Some(&7));
+        assert!(repository.update_grade(&score.id, "phantom", 1).is_err());
         Ok(())
     }
 

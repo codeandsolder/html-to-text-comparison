@@ -1,6 +1,22 @@
 use serde::{Deserialize, Serialize};
 use std::io::Read;
+use std::time::Duration;
 use url::Url;
+
+/// Bound acquisition memory independently of extractor timeouts; HTML is
+/// copied once per isolated worker and compared across every enabled engine.
+pub fn max_html_bytes() -> Result<usize, String> {
+    const DEFAULT: usize = 64 * 1024 * 1024;
+    const MAXIMUM: usize = 1024 * 1024 * 1024;
+    let limit = std::env::var("HTML_TO_TEXT_MAX_HTML_BYTES").map_or(Ok(DEFAULT), |raw| {
+        raw.parse::<usize>()
+            .map_err(|error| format!("invalid HTML_TO_TEXT_MAX_HTML_BYTES: {error}"))
+    })?;
+    if !(1..=MAXIMUM).contains(&limit) {
+        return Err(format!("HTML_TO_TEXT_MAX_HTML_BYTES must be 1..={MAXIMUM}"));
+    }
+    Ok(limit)
+}
 
 /// Exactly one root-document acquisition per run. An extractor receives
 /// the resulting immutable HTML, not the page URL as a fetch instruction.
@@ -25,25 +41,44 @@ impl Acquisition {
                 Err("snapshot acquisition modes do not perform network requests".to_string())
             }
             Self::Http => {
-                let response = ureq::get(url.as_str())
+                let max_bytes = max_html_bytes()?;
+                let config = ureq::Agent::config_builder()
+                    .timeout_global(Some(Duration::from_secs(45)))
+                    .build();
+                let agent: ureq::Agent = config.into();
+                let response = agent
+                    .get(url.as_str())
                     .call()
                     .map_err(|error| format!("HTTP acquisition failed: {error}"))?;
-                let mut html = String::new();
+                // Decode the response's declared charset (including legacy
+                // encodings) before handing the same UTF-8 snapshot to every
+                // extractor. The byte limit also bounds expansion on decode.
+                let mut bytes = Vec::new();
                 response
                     .into_body()
-                    .into_reader()
-                    .read_to_string(&mut html)
+                    .into_with_config()
+                    .lossy_utf8(true)
+                    .reader()
+                    .take(u64::try_from(max_bytes).unwrap_or(u64::MAX) + 1)
+                    .read_to_end(&mut bytes)
                     .map_err(|error| format!("reading HTML: {error}"))?;
-                Ok(html)
+                if bytes.len() > max_bytes {
+                    return Err(format!("acquired HTML exceeds {max_bytes} byte limit"));
+                }
+                String::from_utf8(bytes)
+                    .map_err(|error| format!("decoded HTML was not UTF-8: {error}"))
             }
             Self::Cloakbrowser => {
                 let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("tools/extractors/cloakbrowser-acquire.mjs");
                 let mut command = std::process::Command::new("node");
                 command.arg(script).arg(url.as_str());
-                let output =
-                    crate::worker::run_captured_command(command, acquisition_timeout()?)
-                        .map_err(|error| format!("CloakBrowser acquisition failed: {error}"))?;
+                let output = crate::worker::run_captured_command(
+                    command,
+                    acquisition_timeout()?,
+                    max_html_bytes()?,
+                )
+                .map_err(|error| format!("CloakBrowser acquisition failed: {error}"))?;
                 if !output.status.success() {
                     return Err(format!(
                         "CloakBrowser acquisition exited {}: {}",
@@ -66,8 +101,12 @@ impl Acquisition {
                         "html",
                     ])
                     .arg(url.as_str());
-                let output = crate::worker::run_captured_command(command, acquisition_timeout()?)
-                    .map_err(|error| format!("Lightpanda acquisition failed: {error}"))?;
+                let output = crate::worker::run_captured_command(
+                    command,
+                    acquisition_timeout()?,
+                    max_html_bytes()?,
+                )
+                .map_err(|error| format!("Lightpanda acquisition failed: {error}"))?;
                 if !output.status.success() {
                     return Err(format!(
                         "Lightpanda acquisition exited {}: {}",

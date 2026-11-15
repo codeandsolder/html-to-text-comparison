@@ -1,5 +1,5 @@
 use crate::boilerplate;
-use crate::extractor_config::{ExtractorConfig, ExtractorState, ExtractorStates};
+use crate::extractor_config::{ExtractorState, ExtractorStates};
 use crate::scores::ScoreStore;
 use axum::{
     extract::{Path, State},
@@ -8,10 +8,10 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
 struct AppState {
@@ -39,11 +39,6 @@ pub async fn start_server(port: u16, data_dir: PathBuf) -> Result<(), String> {
         states_path,
     };
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
     let app = Router::new()
         .route("/", get(index))
         .route("/scores", get(list_scores))
@@ -59,15 +54,32 @@ pub async fn start_server(port: u16, data_dir: PathBuf) -> Result<(), String> {
         .route("/t/{name}/{enabled}", post(toggle_extractor))
         .route("/c/{name}", post(configure_extractor))
         .route("/states", get(get_all_states))
-        .layer(cors)
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr)
+    let bind = std::env::var("HTML_TO_TEXT_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr = parse_listen_addr(&bind, port)?;
+    let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| e.to_string())?;
     tracing::info!("Server running on http://{}", addr);
     axum::serve(listener, app).await.map_err(|e| e.to_string())
+}
+
+fn parse_listen_addr(ip: &str, port: u16) -> Result<SocketAddr, String> {
+    let ip = ip
+        .parse::<IpAddr>()
+        .map_err(|error| format!("invalid HTML_TO_TEXT_BIND address: {error}"))?;
+    Ok(SocketAddr::new(ip, port))
+}
+
+/// Extraction, external tools and boilerplate sampling are blocking
+/// workloads; never run them on Tokio's async I/O worker threads.
+async fn run_blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|error| format!("blocking job failed: {error}"))?
 }
 
 async fn index() -> impl IntoResponse {
@@ -103,13 +115,17 @@ async fn run_extraction(
     };
 
     let states = state.extractor_states.read().await.clone();
-    let score = crate::scores::run_extraction(
-        &payload.url,
-        &html,
-        payload.acquisition,
-        &states,
-        &state.score_store,
-    );
+    let repository = state.score_store.clone();
+    let score = run_blocking(move || {
+        crate::scores::run_extraction(
+            &payload.url,
+            &html,
+            payload.acquisition,
+            &states,
+            &repository,
+        )
+    })
+    .await;
     match score {
         Ok(score) => Json(score).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
@@ -120,32 +136,41 @@ async fn run_single_extraction(
     State(state): State<AppState>,
     Json(payload): Json<SingleRunRequest>,
 ) -> impl IntoResponse {
+    let mut states = state.extractor_states.read().await.clone();
+    if !states.states.contains_key(&payload.extractor) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("unknown extractor: {}", payload.extractor),
+        )
+            .into_response();
+    }
     let html = match fetch_html(&payload.url, payload.acquisition).await {
         Ok(h) => h,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
-
-    let mut states = state.extractor_states.read().await.clone();
     for extractor_state in states.states.values_mut() {
         extractor_state.enabled = false;
     }
 
-    let entry = states
-        .states
-        .entry(payload.extractor.clone())
-        .or_insert_with(ExtractorState::default);
-    entry.enabled = true;
-    if let Some(config) = &payload.config {
-        apply_extractor_config(&payload.extractor, config, entry);
+    if let Some(entry) = states.states.get_mut(&payload.extractor) {
+        entry.enabled = true;
+        if let Some(config) = &payload.config {
+            if let Err(error) = apply_extractor_config(&payload.extractor, config, entry) {
+                return (StatusCode::BAD_REQUEST, error).into_response();
+            }
+        }
     }
-
-    let score = crate::scores::run_extraction(
-        &payload.url,
-        &html,
-        payload.acquisition,
-        &states,
-        &state.score_store,
-    );
+    let repository = state.score_store.clone();
+    let score = run_blocking(move || {
+        crate::scores::run_extraction(
+            &payload.url,
+            &html,
+            payload.acquisition,
+            &states,
+            &repository,
+        )
+    })
+    .await;
     match score {
         Ok(score) => Json(score).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
@@ -177,20 +202,27 @@ async fn compare_settings(
             enabled: true,
             config: baseline_config.clone(),
         };
-        apply_extractor_config(&payload.extractor, config, &mut candidate_state);
+        if let Err(error) = apply_extractor_config(&payload.extractor, config, &mut candidate_state)
+        {
+            return (StatusCode::BAD_REQUEST, error).into_response();
+        }
         candidate_state.config
     } else {
         baseline_config.clone()
     };
 
-    let score = crate::scores::compare_single_extractor_settings(
-        &base_score.url,
-        &html,
-        &payload.extractor,
-        baseline_config,
-        candidate_config,
-        &state.score_store,
-    );
+    let repository = state.score_store.clone();
+    let score = run_blocking(move || {
+        crate::scores::compare_single_extractor_settings(
+            &base_score.url,
+            &html,
+            &payload.extractor,
+            baseline_config,
+            candidate_config,
+            &repository,
+        )
+    })
+    .await;
     match score {
         Ok(score) => Json(score).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
@@ -222,18 +254,24 @@ async fn preview_settings(
             enabled: true,
             config: baseline_config,
         };
-        apply_extractor_config(&payload.extractor, config, &mut candidate_state);
+        if let Err(error) = apply_extractor_config(&payload.extractor, config, &mut candidate_state)
+        {
+            return (StatusCode::BAD_REQUEST, error).into_response();
+        }
         candidate_state.config
     } else {
         baseline_config
     };
 
-    let preview = crate::scores::preview_single_extractor_settings(
-        &base_score.url,
-        &html,
-        &payload.extractor,
-        candidate_config,
-    );
+    let preview = run_blocking(move || {
+        crate::scores::preview_single_extractor_settings(
+            &base_score.url,
+            &html,
+            &payload.extractor,
+            candidate_config,
+        )
+    })
+    .await;
     match preview {
         Ok(preview) => Json(preview).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
@@ -255,12 +293,16 @@ async fn run_boilerplate_diff(
     };
 
     let states = state.extractor_states.read().await.clone();
-    match boilerplate::analyze_boilerplate_diff(
-        &base_score.url,
-        &html,
-        &states,
-        payload.sample_count.unwrap_or(5),
-    ) {
+    let result = run_blocking(move || {
+        boilerplate::analyze_boilerplate_diff(
+            &base_score.url,
+            &html,
+            &states,
+            payload.sample_count.unwrap_or(5),
+        )
+    })
+    .await;
+    match result {
         Ok(result) => Json(result).into_response(),
         Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
     }
@@ -271,94 +313,17 @@ async fn toggle_extractor(
     Path((name, enabled)): Path<(String, bool)>,
 ) -> impl IntoResponse {
     let mut states = state.extractor_states.write().await;
-    if let Some(s) = states.states.get_mut(&name) {
-        s.enabled = enabled;
-    } else {
-        let mut cfg = ExtractorConfig::default();
-        match name.as_str() {
-            "html2text" => {
-                cfg.html2text = crate::extractor_config::Html2TextConfig {
-                    max_wrap_width: 1000,
-                    ..Default::default()
-                }
-            }
-            "htmd" => {
-                cfg.htmd = crate::extractor_config::HtmdConfig {
-                    skip_tags: vec!["nav".to_string(), "script".to_string()],
-                    ..Default::default()
-                };
-                cfg.skip_tags = crate::extractor_config::DEFAULT_SKIP_TAGS
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
-            }
-            "mdka" => {
-                cfg.mdka = crate::extractor_config::MdkaConfig {
-                    mode: "balanced".to_string(),
-                    ..Default::default()
-                }
-            }
-            "readable-readability" => {
-                cfg.readable_readability = crate::extractor_config::ReadableReadabilityConfig {
-                    strip_unlikelys: true,
-                    weight_classes: true,
-                    ..Default::default()
-                }
-            }
-            "dom_smoothie" => {
-                cfg.dom_smoothie = crate::extractor_config::DomSmoothieConfig::default();
-            }
-            "august" => cfg.augus_max_width = usize::MAX,
-            "html2md-rs" => {
-                cfg.html2md_rs = crate::extractor_config::Html2MdRsConfig {
-                    ignore_tags: vec!["nav".to_string(), "script".to_string()],
-                };
-                cfg.skip_tags = crate::extractor_config::DEFAULT_SKIP_TAGS
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
-            }
-            "turndown" => {
-                cfg.turndown = crate::extractor_config::TurndownConfig::default();
-            }
-            "percollate" => {
-                cfg.percollate = crate::extractor_config::PercollateConfig::default();
-            }
-            "mdream" => {
-                cfg.mdream = crate::extractor_config::MdreamConfig::default();
-            }
-            "trafilatura" => {
-                cfg.trafilatura = crate::extractor_config::TrafilaturaConfig::default();
-            }
-            "html2text-py" => {
-                cfg.html2text_py = crate::extractor_config::Html2TextPythonConfig::default();
-            }
-            "markdownify" => {
-                cfg.markdownify = crate::extractor_config::MarkdownifyConfig::default();
-            }
-            "webclaw" => {
-                cfg.webclaw = crate::extractor_config::WebclawConfig::default();
-            }
-            "e2m" => {
-                cfg.e2m = crate::extractor_config::E2mConfig::default();
-            }
-            "html-to-markdown-go" => {
-                cfg.html_to_markdown_go =
-                    crate::extractor_config::HtmlToMarkdownGoConfig::default();
-            }
-            _ => {}
-        }
-        states.states.insert(
-            name.clone(),
-            ExtractorState {
-                enabled,
-                config: cfg,
-            },
-        );
+    let mut updated = states.clone();
+    let Some(extractor) = updated.states.get_mut(&name) else {
+        return (StatusCode::NOT_FOUND, format!("unknown extractor: {name}")).into_response();
+    };
+    extractor.enabled = enabled;
+    let persisted = updated.save(&state.states_path);
+    if persisted.is_ok() {
+        *states = updated;
     }
-    let snapshot = states.clone();
     drop(states);
-    match snapshot.save(&state.states_path) {
+    match persisted {
         Ok(()) => (StatusCode::OK, "Toggled").into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
     }
@@ -370,12 +335,19 @@ async fn configure_extractor(
     Json(config): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let mut states = state.extractor_states.write().await;
-    if let Some(s) = states.states.get_mut(&name) {
-        apply_extractor_config(&name, &config, s);
+    let mut updated = states.clone();
+    let Some(extractor) = updated.states.get_mut(&name) else {
+        return (StatusCode::NOT_FOUND, format!("unknown extractor: {name}")).into_response();
+    };
+    if let Err(error) = apply_extractor_config(&name, &config, extractor) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
     }
-    let snapshot = states.clone();
+    let persisted = updated.save(&state.states_path);
+    if persisted.is_ok() {
+        *states = updated;
+    }
     drop(states);
-    match snapshot.save(&state.states_path) {
+    match persisted {
         Ok(()) => (StatusCode::OK, "Configured").into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
     }
@@ -385,135 +357,72 @@ fn extractor_config_payload<'a>(config: &'a serde_json::Value, key: &str) -> &'a
     config.get(key).unwrap_or(config)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "This exhaustive mapping is the typed configuration bridge for all independently supported extractors; individual settings remain isolated in each match arm"
-)]
-fn apply_extractor_config(name: &str, config: &serde_json::Value, state: &mut ExtractorState) {
-    if let Some(timeout) = config.get("timeout_ms").and_then(serde_json::Value::as_u64) {
-        if (1..=900_000).contains(&timeout) {
-            state.config.timeout_ms = Some(timeout);
+fn apply_extractor_config(
+    name: &str,
+    config: &serde_json::Value,
+    state: &mut ExtractorState,
+) -> Result<(), String> {
+    if let Some(value) = config.get("timeout_ms") {
+        let timeout = value
+            .as_u64()
+            .ok_or("timeout_ms must be a positive integer")?;
+        if !(1..=900_000).contains(&timeout) {
+            return Err("timeout_ms must be between 1 and 900000".to_string());
         }
+        state.config.timeout_ms = Some(timeout);
+    }
+    macro_rules! set_typed {
+        ($field:ident, $key:literal) => {{
+            state.config.$field =
+                serde_json::from_value(extractor_config_payload(config, $key).clone())
+                    .map_err(|error| format!("{name} config invalid: {error}"))?;
+        }};
     }
     match name {
-        "html2text" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "html2text").clone())
-            {
-                state.config.html2text = cfg;
-            }
-        }
+        "html2text" => set_typed!(html2text, "html2text"),
         "htmd" => {
-            if let Ok(cfg) = serde_json::from_value::<crate::extractor_config::HtmdConfig>(
-                extractor_config_payload(config, "htmd").clone(),
-            ) {
-                state.config.skip_tags.clone_from(&cfg.skip_tags);
-                state.config.htmd = cfg;
-            }
+            set_typed!(htmd, "htmd");
+            state
+                .config
+                .skip_tags
+                .clone_from(&state.config.htmd.skip_tags);
         }
         "html2md-rs" => {
-            if let Ok(cfg) = serde_json::from_value::<crate::extractor_config::Html2MdRsConfig>(
-                extractor_config_payload(config, "html2md_rs").clone(),
-            ) {
-                state.config.skip_tags.clone_from(&cfg.ignore_tags);
-                state.config.html2md_rs = cfg;
-            }
+            set_typed!(html2md_rs, "html2md_rs");
+            state
+                .config
+                .skip_tags
+                .clone_from(&state.config.html2md_rs.ignore_tags);
         }
         "mdka" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "mdka").clone())
-            {
-                state.config.mdka = cfg;
-            }
+            set_typed!(mdka, "mdka");
+            state.config.mdka.clone().into_conversion_options()?;
         }
-        "readable-readability" => {
-            if let Ok(cfg) = serde_json::from_value(
-                extractor_config_payload(config, "readable_readability").clone(),
-            ) {
-                state.config.readable_readability = cfg;
-            }
-        }
-        "dom_smoothie" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "dom_smoothie").clone())
-            {
-                state.config.dom_smoothie = cfg;
-            }
-        }
+        "readable-readability" => set_typed!(readable_readability, "readable_readability"),
+        "dom_smoothie" => set_typed!(dom_smoothie, "dom_smoothie"),
         "august" => {
-            if let Some(w) = config
+            if let Some(value) = config
                 .get("max_width")
                 .or_else(|| config.get("augus_max_width"))
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|width| usize::try_from(width).ok())
             {
-                state.config.augus_max_width = w;
+                let width = value.as_u64().ok_or("max_width must be an integer")?;
+                state.config.augus_max_width = usize::try_from(width)
+                    .map_err(|error| format!("invalid august max_width: {error}"))?;
             }
         }
-        "turndown" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "turndown").clone())
-            {
-                state.config.turndown = cfg;
-            }
-        }
-        "percollate" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "percollate").clone())
-            {
-                state.config.percollate = cfg;
-            }
-        }
-        "mdream" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "mdream").clone())
-            {
-                state.config.mdream = cfg;
-            }
-        }
-        "trafilatura" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "trafilatura").clone())
-            {
-                state.config.trafilatura = cfg;
-            }
-        }
-        "html2text-py" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "html2text_py").clone())
-            {
-                state.config.html2text_py = cfg;
-            }
-        }
-        "markdownify" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "markdownify").clone())
-            {
-                state.config.markdownify = cfg;
-            }
-        }
-        "webclaw" => {
-            if let Ok(cfg) =
-                serde_json::from_value(extractor_config_payload(config, "webclaw").clone())
-            {
-                state.config.webclaw = cfg;
-            }
-        }
-        "e2m" => {
-            if let Ok(cfg) = serde_json::from_value(extractor_config_payload(config, "e2m").clone())
-            {
-                state.config.e2m = cfg;
-            }
-        }
-        "html-to-markdown-go" => {
-            if let Ok(cfg) = serde_json::from_value(
-                extractor_config_payload(config, "html_to_markdown_go").clone(),
-            ) {
-                state.config.html_to_markdown_go = cfg;
-            }
-        }
+        "turndown" => set_typed!(turndown, "turndown"),
+        "percollate" => set_typed!(percollate, "percollate"),
+        "mdream" => set_typed!(mdream, "mdream"),
+        "trafilatura" => set_typed!(trafilatura, "trafilatura"),
+        "html2text-py" => set_typed!(html2text_py, "html2text_py"),
+        "markdownify" => set_typed!(markdownify, "markdownify"),
+        "webclaw" => set_typed!(webclaw, "webclaw"),
+        "e2m" => set_typed!(e2m, "e2m"),
+        "html-to-markdown-go" => set_typed!(html_to_markdown_go, "html_to_markdown_go"),
+        // Extractors with no custom configuration still accept a deadline.
         _ => {}
     }
+    Ok(())
 }
 
 async fn get_all_states(State(state): State<AppState>) -> Response {
@@ -618,10 +527,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn server_bind_address_is_explicit_and_supports_ipv6() {
+        assert_eq!(
+            parse_listen_addr("127.0.0.1", 3000).map(|addr| addr.to_string()),
+            Ok("127.0.0.1:3000".to_string())
+        );
+        assert_eq!(
+            parse_listen_addr("::1", 8080).map(|addr| addr.to_string()),
+            Ok("[::1]:8080".to_string())
+        );
+        assert!(parse_listen_addr("not an IP", 3000).is_err());
+    }
+
+    #[test]
     fn apply_extractor_config_accepts_nested_payloads() {
         let mut state = ExtractorState::default();
 
-        apply_extractor_config(
+        assert!(apply_extractor_config(
             "html2text",
             &serde_json::json!({
                 "skip_tags": [],
@@ -632,7 +554,8 @@ mod tests {
                 }
             }),
             &mut state,
-        );
+        )
+        .is_ok());
 
         assert_eq!(state.config.html2text.max_wrap_width, 42);
         assert!(state.config.html2text.raw_mode);
@@ -640,17 +563,90 @@ mod tests {
     }
 
     #[test]
+    fn invalid_extractor_configuration_is_rejected_without_mutation() {
+        let mut state = ExtractorState::default();
+        let before = serde_json::to_value(&state.config).ok();
+        assert!(apply_extractor_config(
+            "html2text",
+            &serde_json::json!({"max_wrap_width": "not a number"}),
+            &mut state,
+        )
+        .is_err());
+        assert_eq!(serde_json::to_value(&state.config).ok(), before);
+        assert!(apply_extractor_config(
+            "html2text",
+            &serde_json::json!({"timeout_ms": 900_001}),
+            &mut state,
+        )
+        .is_err());
+        assert!(
+            apply_extractor_config("mdka", &serde_json::json!({"mode": "strict"}), &mut state,)
+                .is_err()
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_extraction_does_not_stall_tokio_reactor() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let complete = std::sync::Arc::new(AtomicBool::new(false));
+        let completed = std::sync::Arc::clone(&complete);
+        let extraction = async move {
+            run_blocking(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                completed.store(true, Ordering::SeqCst);
+                Ok::<(), String>(())
+            })
+            .await
+        };
+        let observed_early = async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            !complete.load(Ordering::SeqCst)
+        };
+        let (result, not_blocked) = tokio::join!(extraction, observed_early);
+        assert!(result.is_ok());
+        assert!(
+            not_blocked,
+            "long extraction blocked the current-thread reactor"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_extractor_toggle_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let state = AppState {
+            score_store: ScoreStore::with_retention(temp.path().join("scores"), 8)?,
+            extractor_states: Arc::new(RwLock::new(ExtractorStates::default())),
+            states_path: temp.path().join("extractor_states.json"),
+        };
+        let response = toggle_extractor(
+            State(state.clone()),
+            Path(("unregistered".to_string(), true)),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!state
+            .extractor_states
+            .read()
+            .await
+            .states
+            .contains_key("unregistered"));
+        Ok(())
+    }
+
+    #[test]
     fn apply_extractor_config_accepts_direct_payloads() {
         let mut state = ExtractorState::default();
 
-        apply_extractor_config(
+        assert!(apply_extractor_config(
             "htmd",
             &serde_json::json!({
                 "skip_tags": ["nav", "aside"],
                 "heading_style": "setex"
             }),
             &mut state,
-        );
+        )
+        .is_ok());
 
         assert_eq!(state.config.htmd.heading_style, "setex");
         assert_eq!(state.config.htmd.skip_tags, vec!["nav", "aside"]);
