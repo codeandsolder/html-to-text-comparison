@@ -38,3 +38,10 @@ The worker sets `TMPDIR`/`TMP`/`TEMP` to the parent-owned IPC directory, so chil
 `time_micros` is the conversion-call duration inside the worker, so native Rust library calls and subprocess-launching converters measure different work. `wall_time_micros` is end-to-end parent duration and includes process and IPC overhead. Neither field is a multi-repeat benchmark, memory measurement, or proof of extraction quality. Use fixed HTML snapshots and inspect output content before interpreting speed or reduction.
 
 Web score data and artifacts are held together under the configured server data root. Deleting a score removes its whole artifact directory even if zero extractors ran; retained runs are count-bounded via `HTML_TO_TEXT_MAX_SAVED_RUNS`.
+
+
+## Resource bounds
+
+The parent worker enforces the configured per-extractor deadline and kills the process group on timeout. Individual external converter commands inherit that group; their stdout/stderr are written to bounded temporary files (not read into an unbounded pipe buffer). A configured `HTML_TO_TEXT_MAX_OUTPUT_BYTES` controls the maximum successful output size, default 64 MiB. If the cap is exceeded, the extractor yields a typed failed result and the output file contains a diagnostic instead of a truncated conversion. CLI file inputs and HTTP/browser snapshots separately obey `HTML_TO_TEXT_MAX_HTML_BYTES`.
+
+The server applies the `HTML_TO_TEXT_MAX_CONCURRENT_RUNS` admission cap before acquiring a new page; it also covers previews, variant comparisons, and boilerplate analysis. CLI runs are single-request processes and do not share the server admission counter.

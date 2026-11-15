@@ -54,7 +54,13 @@ HTML_TO_TEXT_BIND=0.0.0.0 cargo run --release -- --server 3000 /path/to/data
 
 The web server listens on 127.0.0.1 by default. Use HTML_TO_TEXT_BIND to choose another IPv4/IPv6 interface. The API can acquire arbitrary URLs and run external tools, so do not expose it on an untrusted network without access controls; permissive cross-origin headers are deliberately disabled.
 
-HTML acquisition has a 45-second total HTTP deadline and a default 64 MiB decoded HTML limit (HTML_TO_TEXT_MAX_HTML_BYTES, configurable to 1 GiB). Browser acquisition uses its own process deadline and the same output-size cap. The extractor settings file is saved atomically; saved-run metadata changes and pruning are serialized within the server process.
+HTML acquisition has a 45-second total HTTP deadline and a default 64 MiB decoded HTML limit (`HTML_TO_TEXT_MAX_HTML_BYTES`, configurable up to 1 GiB). Browser acquisition uses its own process deadline and the same snapshot-size cap.
+
+Each extractor has a separate **64 MiB output cap** by default (`HTML_TO_TEXT_MAX_OUTPUT_BYTES`, 1 byte to 1 GiB). Native Rust outputs are checked before writing; external converter stdout and stderr are captured to temporary files, checked *while the command runs*, and discarded if oversized. Limits are errors, never silent truncation. The parent worker process group still enforces the extractor-specific deadline and kills descendants; external converters are not moved to a nested group.
+
+The web server permits **2 concurrent expensive jobs** by default (`HTML_TO_TEXT_MAX_CONCURRENT_RUNS`, range 1–64). Acquisition, extraction, preview, setting comparisons and boilerplate sampling all consume a slot; a saturated server returns HTTP **429** immediately instead of growing an unlimited queue. Permits stay owned by blocking jobs even when HTTP callers disconnect. This is an in-process concurrency gate, not cluster-wide resource scheduling.
+
+The extractor settings file is saved atomically; saved-run metadata changes and pruning are serialized within the server process.
 
 The server stores score metadata under `/path/to/data/scores`, with corresponding HTML snapshots and extractor outputs under `/path/to/data/scores/artifacts/<run-id>/`. The retention cap defaults to 100 saved runs, can be set through `HTML_TO_TEXT_MAX_SAVED_RUNS` (positive integer), and deletes old outputs together with their metadata. Failed/empty runs remain inspectable until deleted or expired. Live previews use ephemeral directories.
 

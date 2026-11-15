@@ -201,3 +201,43 @@ fn http_acquisition_decodes_declared_non_utf8_charset() -> Result<(), Box<dyn st
     );
     Ok(())
 }
+
+#[test]
+fn oversized_native_and_external_outputs_are_explicit_failures(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = tempfile::tempdir()?;
+    let source = workspace.path().join("long.html");
+    fs::write(
+        &source,
+        format!(
+            "<html><body><p>{}</p></body></html>",
+            "testing output boundaries ".repeat(200)
+        ),
+    )?;
+    for extractor in ["nanohtml2text", "node-html-markdown"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_html-to-text-comparison"))
+            .args(["--extractor", extractor])
+            .arg(&source)
+            .env("HTML_TO_TEXT_MAX_OUTPUT_BYTES", "128")
+            .current_dir(workspace.path())
+            .output()?;
+        assert!(
+            output.status.success(),
+            "cli failed for {extractor}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let captured = fs::read_to_string(
+            workspace
+                .path()
+                .join("out")
+                .join(format!("{extractor}.txt")),
+        )?;
+        assert!(captured.contains("[ERROR]"), "{extractor}: {captured}");
+        assert!(
+            captured.contains("128 byte limit"),
+            "{extractor}: {captured}"
+        );
+        assert!(captured.len() < 512, "huge output escaped the cap");
+    }
+    Ok(())
+}
