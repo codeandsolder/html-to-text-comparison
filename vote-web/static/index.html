@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <title>Extraction Arena — Vote</title>
+  <link rel="stylesheet" href="/site.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="identity" href="/">
+        <span class="brand-mark">E<span>↔</span>E</span>
+        <span class="brand-words"><strong>EXTRACTION</strong><small>ARENA / PRIVATE CORPUS</small></span>
+      </a>
+      <nav class="tabs" aria-label="Primary navigation">
+        <button id="tab-vote" class="tab active" type="button" aria-current="page">Compare</button>
+        <button id="tab-ranking" class="tab" type="button">Rankings</button>
+      </nav>
+      <div class="header-stats">
+        <div class="mini-stat"><span id="total-votes">0</span><small>VOTES</small></div>
+        <div class="data-tag"><span class="live-dot"></span> JS-REDOX / 100</div>
+      </div>
+    </header>
+    <main>
+      <section id="compare-view" aria-label="Comparison">
+        <div class="eyebrow">SIDE-BY-SIDE EVALUATION <span class="rule"></span> 14 EXTRACTORS</div>
+        <div class="intro">
+          <div>
+            <h1>Which extraction <em>is better?</em></h1>
+            <p>Read both results from the same HTML page. Vote on content quality, completeness and unwanted noise.</p>
+          </div>
+          <div class="intro-controls">
+            <label class="reveal"><input type="checkbox" id="reveal"> Reveal extractor names</label>
+            <button id="skip" type="button" class="ghost" title="Skip this pair without voting (S)">Skip <kbd>S</kbd></button>
+          </div>
+        </div>
+        <div class="sourcebar">
+          <div class="source-icon" aria-hidden="true">◎</div>
+          <div class="source-detail">
+            <div class="source-label">CAPTURED SOURCE <span id="cohort" class="cohort">Loading</span></div>
+            <a id="source-link" target="_blank" rel="noopener noreferrer" href="#">Preparing a comparison...</a>
+          </div>
+          <span id="page-number" class="page-number">PAGE — / 100</span>
+        </div>
+        <div class="comparison-grid">
+          <article class="extraction left-pane">
+            <div class="pane-head">
+              <div class="pane-label"><span class="side-dot left-dot"></span><span>EXTRACTION A</span></div>
+              <div class="pane-details"><span id="name-left" class="engine-name" hidden></span><span id="status-left" class="extractor-status">—</span><span id="size-left">—</span></div>
+            </div>
+            <div class="text-container" id="scroll-left" tabindex="0" aria-label="Left extraction text">
+              <pre id="content-left" class="content">Loading the captured output…</pre>
+            </div>
+            <div class="pane-foot">
+              <a id="full-left" target="_blank" rel="noopener noreferrer" href="#">Full text ↗</a>
+              <span id="truncated-left" class="truncated" hidden>Preview clipped • full text available</span>
+            </div>
+          </article>
+          <div class="versus" aria-hidden="true">VS</div>
+          <article class="extraction right-pane">
+            <div class="pane-head">
+              <div class="pane-label"><span class="side-dot right-dot"></span><span>EXTRACTION B</span></div>
+              <div class="pane-details"><span id="name-right" class="engine-name" hidden></span><span id="status-right" class="extractor-status">—</span><span id="size-right">—</span></div>
+            </div>
+            <div class="text-container" id="scroll-right" tabindex="0" aria-label="Right extraction text">
+              <pre id="content-right" class="content">Loading the captured output…</pre>
+            </div>
+            <div class="pane-foot">
+              <a id="full-right" target="_blank" rel="noopener noreferrer" href="#">Full text ↗</a>
+              <span id="truncated-right" class="truncated" hidden>Preview clipped • full text available</span>
+            </div>
+          </article>
+        </div>
+        <div class="vote-section">
+          <span class="vote-prompt">YOUR VERDICT <span class="muted">/ USE ARROW KEYS</span></span>
+          <div class="vote-actions">
+            <button type="button" class="vote-button vote-left" id="vote-left"><kbd>←</kbd><span>Left is better</span></button>
+            <button type="button" class="vote-button vote-equal" id="vote-equal"><kbd>↓</kbd><span>About equal</span></button>
+            <button type="button" class="vote-button vote-right" id="vote-right"><span>Right is better</span><kbd>→</kbd></button>
+          </div>
+          <div class="secondary-actions">
+            <button type="button" id="undo" disabled>↶ Undo last vote <kbd>Z</kbd></button>
+            <span id="feedback" aria-live="polite" role="status">Votes are saved automatically.</span>
+          </div>
+        </div>
+      </section>
+      <section id="ranking-view" hidden aria-label="Provisional rankings">
+        <div class="eyebrow">CROWD PREFERENCE <span class="rule"></span> ALL 14 EXTRACTORS</div>
+        <div class="intro">
+          <div><h1>Current <em>standings.</em></h1><p>Provisional Elo from left / equal / right judgments across the same pages.</p></div>
+          <div class="intro-controls"><button type="button" id="back-to-vote" class="ghost">← Keep voting</button></div>
+        </div>
+        <div class="rank-meta"><span id="rank-vote-count">0 votes</span><span id="rank-pages-count">0 of 100 pages compared</span></div>
+        <div class="rank-table-wrap">
+          <table class="rank-table">
+            <thead><tr><th>RANK</th><th>EXTRACTOR</th><th>ELO</th><th>VOTES</th><th>W</th><th>≈</th><th>L</th></tr></thead>
+            <tbody id="ranking-rows"></tbody>
+          </table>
+        </div>
+        <p class="rank-note">Every engine starts at 1200. Wins add rating, losses remove it, and ties split the result. Early rankings are volatile; results reflect these comparisons, not a universal benchmark.</p>
+      </section>
+    </main>
+    <footer class="footer">
+      <div>100 real browser snapshots · 14 extraction engines · no re-fetching</div>
+      <div><span class="live-dot"></span> Private corpus · Persisted votes · <a href="/readyz" target="_blank" rel="noopener noreferrer">System status</a></div>
+    </footer>
+  </div>
+</body>
+</html>

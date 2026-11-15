@@ -91,3 +91,14 @@ To enable the comparison with the Jina Reader:
 ```sh
 JINA_API_KEY=... cargo run --release --features=reader-lm-api -- <url-to-scrape>
 ```
+
+
+## Extraction Arena — paired voting
+
+The separate Rust web service in [vote-web](vote-web/) serves blinded pairwise
+quality comparisons from the verified 100-page js-redox HTML corpus. Use
+Left / Down / Right arrow keys for left better / equal / right better, S
+to skip, Z to undo, or the matching touch buttons. SQLite keeps the full vote
+history and the Rankings view derives provisional Elo ratings. Acer serves the
+site through Certifex at https://extract-vote.onhir.eu (Tailscale only).
+The dataset, extraction outputs and votes stay on Acer, not in this Git repo.
