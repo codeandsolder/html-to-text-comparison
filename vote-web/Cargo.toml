@@ -6,7 +6,7 @@ rust-version = "1.99"
 publish = false
 
 [dependencies]
-axum = { version = "0.8", features = ["json"] }
+axum = { version = "0.8.9", features = ["json"] }
 tokio = { version = "1.54", features = ["full"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio"] }
 serde = { version = "1.0.229", features = ["derive"] }
