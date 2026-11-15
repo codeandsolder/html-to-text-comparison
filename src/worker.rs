@@ -1,6 +1,5 @@
 use std::{
     fs,
-    io::Read,
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
     thread,
@@ -54,6 +53,22 @@ fn validate_name(name: &str) -> Result<(), String> {
         return Err(format!("invalid extractor output name: {name:?}"));
     }
     Ok(())
+}
+
+/// Maximum accepted output of an individual extractor (not input HTML).
+/// Enforced in both the native runner and external command capture.
+pub fn max_output_bytes() -> Result<usize, String> {
+    const DEFAULT: usize = 64 * 1024 * 1024;
+    const UPPER: usize = 1024 * 1024 * 1024;
+    let limit = std::env::var("HTML_TO_TEXT_MAX_OUTPUT_BYTES").map_or(Ok(DEFAULT), |value| {
+        value
+            .parse::<usize>()
+            .map_err(|error| format!("invalid HTML_TO_TEXT_MAX_OUTPUT_BYTES: {error}"))
+    })?;
+    if !(1..=UPPER).contains(&limit) {
+        return Err(format!("HTML_TO_TEXT_MAX_OUTPUT_BYTES must be 1..={UPPER}"));
+    }
+    Ok(limit)
 }
 
 pub fn worker_main() -> Result<(), String> {
@@ -167,6 +182,14 @@ impl Drop for GroupGuard {
 /// One dedicated OS process group (Unix) or Job Object (Windows) per extraction.
 /// Kill *and reap* the entire group when its deadline is reached.
 fn wait_for_group(command: &mut Command, timeout: Duration) -> Result<GroupExit, String> {
+    wait_for_group_with_capture(command, timeout, None)
+}
+
+fn wait_for_group_with_capture(
+    command: &mut Command,
+    timeout: Duration,
+    cap: Option<&CaptureFiles<'_>>,
+) -> Result<GroupExit, String> {
     let started = Instant::now();
     let mut guard = GroupGuard(Some(
         command
@@ -177,10 +200,15 @@ fn wait_for_group(command: &mut Command, timeout: Duration) -> Result<GroupExit,
         let child = guard.0.as_mut().ok_or("process group missing")?;
         match child.try_wait() {
             Ok(Some(status)) => {
-                guard.0.take();
+                if let Some(capture) = cap {
+                    capture.check()?;
+                }
                 return Ok(GroupExit::Exited(status));
             }
             Ok(None) => {
+                if let Some(capture) = cap {
+                    capture.check()?;
+                }
                 if started.elapsed() >= timeout {
                     child
                         .kill()
@@ -202,18 +230,65 @@ fn wait_for_group(command: &mut Command, timeout: Duration) -> Result<GroupExit,
     }
 }
 
-/// Capture a browser/acquisition subprocess without risking a pipe deadlock.
-/// All descendants belong to the same killable process group/job object.
+/// Capture subprocess stdout and stderr into scoped temporary files; bound
+/// their growth during execution, before loading bytes into memory.
+///
+/// Extractor children intentionally inherit their worker's OS process group
+/// so that a parent-side timeout kills *all* descendants, including uv/node.
+pub fn run_bounded_command(
+    command: &mut Command,
+    timeout: Duration,
+    max_stdout: usize,
+) -> Result<std::process::Output, String> {
+    capture_command(command, timeout, max_stdout, false)
+}
+
+/// Browser acquisition is not inside an extractor worker. It needs a
+/// dedicated process group of its own for complete teardown on timeout.
 pub fn run_captured_command(
     mut command: Command,
     timeout: Duration,
     max_stdout: usize,
 ) -> Result<std::process::Output, String> {
+    command.stdin(Stdio::null());
+    capture_command(&mut command, timeout, max_stdout, true)
+}
+
+struct CaptureFiles<'a> {
+    stdout: &'a Path,
+    stderr: &'a Path,
+    max_stdout: u64,
+    max_stderr: u64,
+}
+
+impl CaptureFiles<'_> {
+    fn check(&self) -> Result<(), String> {
+        for (path, bound, description) in [
+            (self.stdout, self.max_stdout, "stdout"),
+            (self.stderr, self.max_stderr, "stderr"),
+        ] {
+            let length = fs::metadata(path)
+                .map_err(|error| format!("checking captured {description}: {error}"))?
+                .len();
+            if length > bound {
+                return Err(format!("{description} exceeds {bound} byte limit"));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn capture_command(
+    command: &mut Command,
+    timeout: Duration,
+    max_stdout: usize,
+    own_group: bool,
+) -> Result<std::process::Output, String> {
+    const STDERR_LIMIT: u64 = 1024 * 1024;
     let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
     let stdout_path = scratch.path().join("stdout");
     let stderr_path = scratch.path().join("stderr");
     command
-        .stdin(Stdio::null())
         .stdout(Stdio::from(
             fs::File::create(&stdout_path).map_err(|error| error.to_string())?,
         ))
@@ -223,34 +298,71 @@ pub fn run_captured_command(
         .env("TMPDIR", scratch.path())
         .env("TMP", scratch.path())
         .env("TEMP", scratch.path());
-    let status = match wait_for_group(&mut command, timeout)? {
+    let cap = CaptureFiles {
+        stdout: &stdout_path,
+        stderr: &stderr_path,
+        max_stdout: u64::try_from(max_stdout).unwrap_or(u64::MAX),
+        max_stderr: STDERR_LIMIT,
+    };
+    let exit = if own_group {
+        wait_for_group_with_capture(command, timeout, Some(&cap))?
+    } else {
+        wait_for_child_with_capture(command, timeout, &cap)?
+    };
+    let status = match exit {
         GroupExit::TimedOut => {
             return Err(format!(
-                "browser acquisition exceeded its {}s deadline",
+                "subprocess exceeded its {}s deadline",
                 timeout.as_secs_f64()
             ));
         }
         GroupExit::Exited(status) => status,
     };
-    let size = fs::metadata(&stdout_path)
-        .map_err(|error| error.to_string())?
-        .len();
-    if size > u64::try_from(max_stdout).unwrap_or(u64::MAX) {
-        return Err(format!("browser snapshot exceeds {max_stdout} byte limit"));
-    }
-    // Diagnostic output is not HTML; a failed Chromium process can be
-    // extremely verbose and must not be loaded into memory without a bound.
-    let mut stderr = Vec::new();
-    fs::File::open(stderr_path)
-        .map_err(|error| error.to_string())?
-        .take(128 * 1024)
-        .read_to_end(&mut stderr)
-        .map_err(|error| error.to_string())?;
+    cap.check()?;
     Ok(std::process::Output {
         status,
         stdout: fs::read(stdout_path).map_err(|error| error.to_string())?,
-        stderr,
+        stderr: fs::read(stderr_path).map_err(|error| error.to_string())?,
     })
+}
+
+fn wait_for_child_with_capture(
+    command: &mut Command,
+    timeout: Duration,
+    cap: &CaptureFiles<'_>,
+) -> Result<GroupExit, String> {
+    let started = Instant::now();
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("starting subprocess: {error}"))?;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                cap.check()?;
+                return Ok(GroupExit::Exited(status));
+            }
+            Ok(None) => {
+                if let Err(error) = cap.check() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    child
+                        .wait()
+                        .map_err(|error| format!("reaping subprocess: {error}"))?;
+                    return Ok(GroupExit::TimedOut);
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("monitoring subprocess: {error}"));
+            }
+        }
+    }
 }
 
 pub fn execute_isolated(
@@ -314,6 +426,11 @@ pub fn execute_isolated(
                     .map_err(|error| format!("worker did not write output: {error}"))?
                     .len();
                 if reply.stat.status.is_success()
+                    && actual_size > u64::try_from(max_output_bytes()?).unwrap_or(u64::MAX)
+                {
+                    return Err("worker output exceeds configured byte limit".to_string());
+                }
+                if reply.stat.status.is_success()
                     && actual_size != u64::try_from(reply.stat.output_size).unwrap_or(u64::MAX)
                 {
                     return Err("worker output length disagrees with metadata".to_string());
@@ -352,6 +469,44 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(output.stdout, b"12345");
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_capture_stops_stdout_growth_before_completion() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "yes text | head -c 300000; sleep 2"]);
+        let started = Instant::now();
+        let error = run_bounded_command(&mut command, Duration::from_secs(3), 128);
+        assert!(error.is_err_and(|message| message.contains("stdout exceeds 128")));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "output limiter waited for an otherwise running process"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_capture_preserves_explicit_stdin() -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::{Seek, Write};
+        let mut input = tempfile::tempfile()?;
+        input.write_all(b"stream from a preopened file")?;
+        input.rewind()?;
+        let mut command = Command::new("cat");
+        command.stdin(Stdio::from(input));
+        let output = run_bounded_command(&mut command, Duration::from_secs(2), 100)?;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"stream from a preopened file");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_capture_stops_unbounded_stderr() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "yes err | head -c 3000000 >&2; sleep 2"]);
+        let error = run_bounded_command(&mut command, Duration::from_secs(3), 128);
+        assert!(error.is_err_and(|message| message.contains("stderr exceeds")));
     }
 
     #[cfg(unix)]

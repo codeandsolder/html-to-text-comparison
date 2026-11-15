@@ -722,8 +722,24 @@ fn extractor_node_modules() -> PathBuf {
     )
 }
 
+// Keep external converter descendants in their isolated worker's process
+// group; the worker's parent owns the actual extractor deadline.
+trait BoundedOutput {
+    fn bounded_output(&mut self) -> Result<std::process::Output, String>;
+}
+
+impl BoundedOutput for std::process::Command {
+    fn bounded_output(&mut self) -> Result<std::process::Output, String> {
+        crate::worker::run_bounded_command(
+            self,
+            std::time::Duration::from_mins(15),
+            crate::worker::max_output_bytes()?,
+        )
+    }
+}
+
 fn command_output_text(
-    output: std::io::Result<std::process::Output>,
+    output: Result<std::process::Output, String>,
     tool: &str,
 ) -> Result<String, String> {
     let output = output.map_err(|error| format!("{tool} launch failed: {error}"))?;
@@ -773,7 +789,7 @@ fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> Resul
         .arg(&tmp)
         .arg(options.to_string())
         .arg(remove_tags_json)
-        .output();
+        .bounded_output();
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "turndown")
@@ -843,7 +859,9 @@ fn run_percollate(html: &str, cfg: &PercollateConfig) -> Result<String, String> 
     std::fs::write(&tmp, html)
         .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let args = build_percollate_args(&tmp, cfg);
-    let out = std::process::Command::new("node").args(&args).output();
+    let out = std::process::Command::new("node")
+        .args(&args)
+        .bounded_output();
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "percollate")
@@ -859,7 +877,7 @@ fn run_node_snapshot_parser(kind: &str, html: &str, url: &url::Url) -> Result<St
         .arg(kind)
         .arg(input.path())
         .arg(url.as_str())
-        .output();
+        .bounded_output();
     command_output_text(output, kind)
 }
 
@@ -873,7 +891,7 @@ fn run_mozilla_readability(html: &str) -> Result<String, String> {
         .env("NODE_PATH", extractor_node_modules())
         .args(["-e", script])
         .arg(input.path())
-        .output();
+        .bounded_output();
     command_output_text(out, "mozilla-readability")
 }
 
@@ -895,7 +913,7 @@ fn run_resiliparse(html: &str) -> Result<String, String> {
         .arg(python_requirements("resiliparse"))
         .args(["--", "python3", "-c", script])
         .arg(input.path())
-        .output();
+        .bounded_output();
     command_output_text(out, "resiliparse")
 }
 
@@ -912,7 +930,7 @@ fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> Result<String, String
         .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
-        .output();
+        .bounded_output();
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "trafilatura")
@@ -931,7 +949,7 @@ fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> Result<String, S
         .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
-        .output();
+        .bounded_output();
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "html2text.py")
@@ -1046,7 +1064,7 @@ fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> Result<String, String
         .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
-        .output();
+        .bounded_output();
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "markdownify")
@@ -1080,7 +1098,9 @@ fn run_webclaw(html: &str, states: &ExtractorStates) -> Result<String, String> {
     });
     let binary = std::env::var_os("HTML_TO_TEXT_WEBCLAW_BIN")
         .unwrap_or_else(|| std::ffi::OsString::from("webclaw"));
-    let out = std::process::Command::new(binary).args(&args).output();
+    let out = std::process::Command::new(binary)
+        .args(&args)
+        .bounded_output();
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "webclaw")
@@ -1198,7 +1218,7 @@ fn run_e2m(html: &str, states: &ExtractorStates) -> Result<String, String> {
                 "false"
             },
         ])
-        .output();
+        .bounded_output();
 
     let _ = std::fs::remove_file(&tmp);
     let _ = std::fs::remove_dir_all(&work_dir);
@@ -1260,7 +1280,7 @@ fn run_html_to_markdown_go(
     let out = std::process::Command::new(binary)
         .args(&args)
         .stdin(std::process::Stdio::from(input))
-        .output();
+        .bounded_output();
     command_output_text(out, "html-to-markdown-go")
 }
 

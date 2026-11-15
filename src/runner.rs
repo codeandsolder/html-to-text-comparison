@@ -98,6 +98,19 @@ impl Runner {
                 (String::new(), ExtractionStatus::Panicked, error)
             }
         };
+        let (output, status, error) = if status.is_success() {
+            match crate::worker::max_output_bytes() {
+                Ok(limit) if output.len() > limit => (
+                    String::new(),
+                    ExtractionStatus::Failed,
+                    format!("extractor output exceeds {limit} byte limit"),
+                ),
+                Err(message) => (String::new(), ExtractionStatus::Failed, message),
+                _ => (output, status, error),
+            }
+        } else {
+            (output, status, error)
+        };
         let final_output = if status.is_success() {
             output
         } else {
