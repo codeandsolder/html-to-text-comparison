@@ -653,6 +653,7 @@ pub fn run_cli_extractor(
                 .get("percollate")
                 .map_or_default(|s| s.config.percollate.clone()),
         ),
+        "resiliparse" => run_resiliparse(html),
         "trafilatura" => run_trafilatura(
             html,
             &states
@@ -881,6 +882,21 @@ fn python_requirements(name: &str) -> std::path::PathBuf {
         .join("tools/extractors/python")
         .join(name)
         .join("requirements.txt")
+}
+
+/// Independent Lexbor-based content extractor operating exclusively on
+/// the acquired HTML, with no URL or network access.
+fn run_resiliparse(html: &str) -> Result<String, String> {
+    let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+    std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
+    let script = r"import sys; from pathlib import Path; from resiliparse.extract.html2text import extract_plain_text; html = Path(sys.argv[1]).read_text(encoding='utf-8'); print(extract_plain_text(html, main_content=True, preserve_formatting=True), end='')";
+    let out = std::process::Command::new("uv")
+        .args(["run", "--no-project", "--with-requirements"])
+        .arg(python_requirements("resiliparse"))
+        .args(["--", "python3", "-c", script])
+        .arg(input.path())
+        .output();
+    command_output_text(out, "resiliparse")
 }
 
 fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> Result<String, String> {
@@ -1913,6 +1929,51 @@ mod tests {
         assert_eq!(preview.extractor_key, "html2text");
         assert!(preview.output.contains("alpha beta"));
         assert!(preview.output.matches('\n').count() > 1);
+        Ok(())
+    }
+
+    #[test]
+    fn resiliparse_excludes_navigation_without_another_acquisition(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let html = include_str!("../fixtures/article-with-navigation.html");
+        let output = run_resiliparse(html)?;
+        for marker in [
+            "CONTENT_SENTINEL_ALPHA",
+            "CONTENT_SENTINEL_BETA",
+            "CONTENT_SENTINEL_GAMMA",
+        ] {
+            assert!(output.contains(marker), "missing content marker: {marker}");
+        }
+        for marker in [
+            "UNRELATED_NAVIGATION_HELP_CENTER",
+            "UNRELATED_SIDEBAR_SPONSORED_LINKS",
+            "UNRELATED_FOOTER_COPYRIGHT_NOTICE",
+        ] {
+            assert!(
+                !output.contains(marker),
+                "leaked boilerplate marker: {marker}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn resiliparse_retains_technical_documentation_values() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let html = include_str!("../fixtures/technical-reference.html");
+        let output = run_resiliparse(html)?;
+        for value in [
+            "CONTENT_SENTINEL_REGISTER_TEXT",
+            "CTRL_A",
+            "0x18",
+            "0x2C",
+            "0x00ff_0000",
+            "CONTENT_SENTINEL_END_DOC",
+        ] {
+            assert!(output.contains(value), "missing technical content: {value}");
+        }
+        assert!(!output.contains("IRRELEVANT_DOCS_NAVIGATION"));
+        assert!(!output.contains("IRRELEVANT_DOCS_FOOTER"));
         Ok(())
     }
 

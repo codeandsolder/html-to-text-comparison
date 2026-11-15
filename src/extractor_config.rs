@@ -523,7 +523,7 @@ pub fn default_timeout_ms(name: &str) -> u64 {
     match name {
         "e2m" => 120_000,
         "webclaw" => 60_000,
-        "percollate" | "trafilatura" | "markdownify" | "html2text-py" => 45_000,
+        "percollate" | "trafilatura" | "markdownify" | "html2text-py" | "resiliparse" => 45_000,
         "turndown" | "html-to-markdown-go" => 30_000,
         _ => 10_000,
     }
@@ -613,6 +613,7 @@ impl Default for ExtractorStates {
             "percollate",
             "readability",
             "readable-readability",
+            "resiliparse",
             "trafilatura",
             "turndown",
             "webclaw",

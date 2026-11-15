@@ -19,6 +19,7 @@ The Rust converter contract is `Result<String, String>`. A text document beginni
 |---|---|---|
 | Turndown | `node -e` with pinned `turndown` module | HTML scratch file; `TurndownConfig` serialized to JS options |
 | Percollate | Pinned `percollate/cli.js md -o -` | HTML scratch file; Markdown options from `PercollateConfig` |
+| Resiliparse | uv with pinned requirements in tools/extractors/python/resiliparse/requirements.txt | Already-acquired HTML snapshot, Lexbor-based main-content plaintext extraction |
 | Trafilatura | `uv run --no-project --with-requirements tools/extractors/python/trafilatura/requirements.txt` | HTML scratch file and JSON flags |
 | html2text-py | `uv run --no-project --with-requirements tools/extractors/python/html2text/requirements.txt` | HTML scratch file and JSON flags |
 | Markdownify | `uv run --no-project --with-requirements tools/extractors/python/markdownify/requirements.txt` | HTML scratch file and serialized options |

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Engine controller reference</title></head>
+<body>
+<nav>IRRELEVANT_DOCS_NAVIGATION</nav>
+<main>
+<h1>Engine controller register map</h1>
+<p>CONTENT_SENTINEL_REGISTER_TEXT This example checks whether extraction preserves technical documentation and values that are not normal prose.</p>
+<table>
+<thead><tr><th>Register</th><th>Offset</th><th>Bits</th></tr></thead>
+<tbody><tr><td>CTRL_A</td><td>0x18</td><td>7:0</td></tr>
+<tr><td>STATUS</td><td>0x2C</td><td>15:8</td></tr></tbody>
+</table>
+<pre><code>const u32 mask = 0x00ff_0000;
+write_register(CTRL_A, mask);</code></pre>
+<p>CONTENT_SENTINEL_END_DOC The table and code are part of the document, not boilerplate.</p>
+</main><footer>IRRELEVANT_DOCS_FOOTER</footer>
+</body></html>
