@@ -413,7 +413,7 @@ fn extractor_config_payload<'a>(config: &'a serde_json::Value, key: &str) -> &'a
     config.get(key).unwrap_or(config)
 }
 
-fn apply_extractor_config(
+pub(crate) fn apply_extractor_config(
     name: &str,
     config: &serde_json::Value,
     state: &mut ExtractorState,
@@ -435,6 +435,21 @@ fn apply_extractor_config(
         }};
     }
     match name {
+        "fast_html2md" => set_typed!(fast_html2md, "fast_html2md"),
+        "html2md" => set_typed!(html2md, "html2md"),
+        "resiliparse" => {
+            set_typed!(resiliparse, "resiliparse");
+            if !matches!(
+                state.config.resiliparse.formatting_mode.as_str(),
+                "plain" | "formatted" | "minimal_html"
+            ) {
+                return Err(
+                    "resiliparse formatting_mode must be plain, formatted or minimal_html".into(),
+                );
+            }
+        }
+        "mozilla-readability" => set_typed!(mozilla_readability, "mozilla_readability"),
+        "node-html-markdown" => set_typed!(node_html_markdown, "node_html_markdown"),
         "html2text" => set_typed!(html2text, "html2text"),
         "htmd" => {
             set_typed!(htmd, "htmd");

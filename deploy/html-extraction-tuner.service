@@ -1,0 +1,32 @@
+[Unit]
+Description=HTML Extraction Lab — 20-page live settings tuner
+After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=jan
+Group=jan
+WorkingDirectory=/home/jan/services/html-extraction-tuner
+ExecStart=/home/jan/services/html-extraction-tuner/bin/html-to-text-comparison --tune-server 18580 /home/jan/datasets/html-to-text-comparison/hn-top20-20261115 /home/jan/services/html-extraction-tuner/state
+Environment=PATH=/home/jan/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin
+Environment=HTML_TO_TEXT_EXTRACTOR_ROOT=/home/jan/services/html-extraction-tuner/extractors
+Environment=TMPDIR=/home/jan/services/html-extraction-tuner/tmp
+Environment=RUST_LOG=html_to_text_comparison=info
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/home/jan/services/html-extraction-tuner/state /home/jan/services/html-extraction-tuner/tmp
+MemoryMax=1536M
+TasksMax=144
+
+[Install]
+WantedBy=multi-user.target

@@ -492,10 +492,126 @@ impl Default for DomSmoothieConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct FastHtml2MdConfig {
+    pub commonmark: bool,
+    pub preserve_spans: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Html2MdConfig {
+    pub preserve_spans: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResiliparseConfig {
+    pub main_content: bool,
+    pub formatting_mode: String,
+    pub list_bullets: bool,
+    pub alt_texts: bool,
+    pub links: bool,
+    pub form_fields: bool,
+    pub noscript: bool,
+    pub comments: bool,
+    pub post_meta: bool,
+    pub hidden_elements: bool,
+    pub skip_elements: Vec<String>,
+}
+
+impl Default for ResiliparseConfig {
+    fn default() -> Self {
+        Self {
+            main_content: true,
+            formatting_mode: "formatted".into(),
+            list_bullets: true,
+            alt_texts: true,
+            links: false,
+            form_fields: false,
+            noscript: false,
+            comments: true,
+            post_meta: true,
+            hidden_elements: false,
+            skip_elements: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MozillaReadabilityConfig {
+    pub max_elems_to_parse: usize,
+    pub nb_top_candidates: usize,
+    pub char_threshold: usize,
+    pub keep_classes: bool,
+    pub classes_to_preserve: Vec<String>,
+    pub disable_json_ld: bool,
+    pub link_density_modifier: f32,
+}
+
+impl Default for MozillaReadabilityConfig {
+    fn default() -> Self {
+        Self {
+            max_elems_to_parse: 0,
+            nb_top_candidates: 5,
+            char_threshold: 500,
+            keep_classes: false,
+            classes_to_preserve: Vec::new(),
+            disable_json_ld: false,
+            link_density_modifier: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NodeHtmlMarkdownConfig {
+    pub code_fence: String,
+    pub bullet_marker: String,
+    pub indent: String,
+    pub code_block_style: String,
+    pub em_delimiter: String,
+    pub strong_delimiter: String,
+    pub strike_delimiter: String,
+    pub max_consecutive_newlines: usize,
+    pub keep_data_images: bool,
+    pub use_link_reference_definitions: bool,
+    pub use_inline_links: bool,
+    pub ignore: Vec<String>,
+    pub block_elements: Vec<String>,
+}
+
+impl Default for NodeHtmlMarkdownConfig {
+    fn default() -> Self {
+        Self {
+            code_fence: "\u{0060}\u{0060}\u{0060}".to_owned(),
+            bullet_marker: "*".into(),
+            indent: "  ".into(),
+            code_block_style: "fenced".into(),
+            em_delimiter: "_".into(),
+            strong_delimiter: "**".into(),
+            strike_delimiter: "~~".into(),
+            max_consecutive_newlines: 3,
+            keep_data_images: false,
+            use_link_reference_definitions: false,
+            use_inline_links: true,
+            ignore: Vec::new(),
+            block_elements: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExtractorConfig {
     /// Hard process deadline; None uses a backend-specific default.
     pub timeout_ms: Option<u64>,
     pub skip_tags: Vec<String>,
+    pub fast_html2md: FastHtml2MdConfig,
+    pub html2md: Html2MdConfig,
+    pub resiliparse: ResiliparseConfig,
+    pub mozilla_readability: MozillaReadabilityConfig,
+    pub node_html_markdown: NodeHtmlMarkdownConfig,
     pub html2text: Html2TextConfig,
     pub htmd: HtmdConfig,
     pub html2md_rs: Html2MdRsConfig,

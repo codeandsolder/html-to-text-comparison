@@ -4,6 +4,7 @@ mod extractor_config;
 mod metrics;
 mod runner;
 mod scores;
+mod tune;
 mod web;
 mod worker;
 
@@ -24,7 +25,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = std::env::args().collect();
 
-    if args.len() > 1 && args[1] == "--server" {
+    if args.len() > 1 && args[1] == "--tune-server" {
+        let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(18580);
+        let root = args.get(3).map_or_else(
+            || PathBuf::from("/home/jan/datasets/html-to-text-comparison/hn-top20-20261115"),
+            PathBuf::from,
+        );
+        let state = args.get(4).map_or_else(
+            || PathBuf::from("/home/jan/services/html-extraction-tuner/state"),
+            PathBuf::from,
+        );
+        tune::serve(port, root, state)
+            .await
+            .map_err(std::io::Error::other)?;
+    } else if args.len() > 1 && args[1] == "--server" {
         let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(3000);
         let data_dir: PathBuf = args.get(3).map_or_else(|| "data".into(), PathBuf::from);
         if let Err(e) = web::start_server(port, data_dir).await {
@@ -108,6 +122,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             args[0]
         );
         eprintln!("  {} --acquire {{http|lightpanda|cloakbrowser}} [--extractor NAME] <url>  One acquisition", args[0]);
+        eprintln!(
+            "  {} --tune-server [port] [dataset] [state]   Live 2-page HN settings editor",
+            args[0]
+        );
         eprintln!("  {} --server [port]   Start web server", args[0]);
         eprintln!();
         eprintln!("Web server mode: {} --server 3000", args[0]);
