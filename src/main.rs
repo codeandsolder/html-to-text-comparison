@@ -32,7 +32,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(1);
         }
     } else if args.len() > 1 {
-        let (extractor, mut method, input, base_url) = parse_cli_args(&args[1..])?;
+        let CliArgs {
+            extractor,
+            mut method,
+            input,
+            base_url,
+        } = parse_cli_args(&args[1..])?;
         let current_dir = std::env::current_dir()?;
         let out_dir = current_dir.join("out");
 
@@ -110,17 +115,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse_cli_args(
-    arguments: &[String],
-) -> Result<
-    (
-        Option<String>,
-        acquisition::Acquisition,
-        String,
-        Option<url::Url>,
-    ),
-    Box<dyn std::error::Error>,
-> {
+struct CliArgs {
+    extractor: Option<String>,
+    method: acquisition::Acquisition,
+    input: String,
+    base_url: Option<url::Url>,
+}
+
+fn parse_cli_args(arguments: &[String]) -> Result<CliArgs, Box<dyn std::error::Error>> {
     let mut extractor: Option<String> = None;
     let mut method = acquisition::Acquisition::Http;
     let mut base_url = None;
@@ -158,5 +160,10 @@ fn parse_cli_args(
         }
     }
     let input = input.ok_or("missing HTML file or URL")?;
-    Ok((extractor, method, input, base_url))
+    Ok(CliArgs {
+        extractor,
+        method,
+        input,
+        base_url,
+    })
 }

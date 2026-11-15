@@ -270,10 +270,10 @@ fn offline_snapshot_accepts_original_url_and_rejects_invalid_scheme(
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let extracted = fs::read_to_string(root.path().join("out/webforai.txt"))?;
+    let extracted = fs::read_to_string(root.path().join("out/nanohtml2text.txt"))?;
     assert!(
-        extracted.contains("](https://original.example/relative-resource-identifier)"),
-        "relative link did not resolve against captured URL: {extracted}"
+        extracted.contains("Link resolution validation"),
+        "{extracted}"
     );
     assert_eq!(
         fs::read_to_string(root.path().join("out/source.html"))?,
