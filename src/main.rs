@@ -61,8 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         std::fs::create_dir_all(&out_dir)?;
 
-        let html_file = out_dir.join("html.html");
-        std::fs::write(&html_file, &html)?;
+        let snapshot_path = out_dir.join("source.html");
+        std::fs::write(&snapshot_path, &html)?;
         println!("Acquisition: {method:?}, HTML Size (bytes): {}", html.len());
 
         let mut runner = runner::Runner::new(out_dir, html);

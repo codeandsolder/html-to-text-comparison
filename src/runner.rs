@@ -159,7 +159,7 @@ impl Runner {
         });
         let outcome = crate::worker::execute_isolated(
             &self.out_dir,
-            &self.html,
+            &self.out_dir.join("source.html"),
             extractor_key,
             output_name,
             url,

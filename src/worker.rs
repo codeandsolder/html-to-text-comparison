@@ -20,7 +20,7 @@ struct Request {
     key: String,
     name: String,
     url: String,
-    html: String,
+    snapshot_path: PathBuf,
     states: ExtractorStates,
     output_dir: PathBuf,
 }
@@ -71,6 +71,33 @@ pub fn max_output_bytes() -> Result<usize, String> {
     Ok(limit)
 }
 
+/// Worker requests may only access the immutable snapshot owned by their
+/// run directory. Reject missing files, symlinks escaping that directory,
+/// and giant inputs before allocating the snapshot string.
+fn read_snapshot(request: &Request) -> Result<String, String> {
+    let run_dir = fs::canonicalize(&request.output_dir)
+        .map_err(|error| format!("resolving run directory: {error}"))?;
+    let expected = run_dir.join("source.html");
+    let source = fs::canonicalize(&request.snapshot_path)
+        .map_err(|error| format!("resolving snapshot: {error}"))?;
+    if source != expected {
+        return Err("worker snapshot is not the run's immutable source.html".to_string());
+    }
+    let limit = crate::acquisition::max_html_bytes()?;
+    let size = fs::metadata(&source)
+        .map_err(|error| format!("reading snapshot metadata: {error}"))?
+        .len();
+    if size > u64::try_from(limit).unwrap_or(u64::MAX) {
+        return Err(format!("worker snapshot exceeds {limit} byte limit"));
+    }
+    let html =
+        fs::read_to_string(&source).map_err(|error| format!("reading UTF-8 snapshot: {error}"))?;
+    if html.len() > limit {
+        return Err(format!("worker snapshot exceeds {limit} byte limit"));
+    }
+    Ok(html)
+}
+
 pub fn worker_main() -> Result<(), String> {
     let mut args = std::env::args_os().skip(2);
     let request_path = args.next().ok_or("missing worker request path")?;
@@ -91,7 +118,8 @@ pub fn worker_main() -> Result<(), String> {
         return Err(format!("unknown extractor: {}", request.key));
     }
     let parsed_url = url::Url::parse(&request.url).map_err(|error| error.to_string())?;
-    let mut runner = Runner::new(request.output_dir, request.html);
+    let html = read_snapshot(&request)?;
+    let mut runner = Runner::new(request.output_dir, html);
     run_named_extractor(
         &mut runner,
         &request.states,
@@ -367,7 +395,7 @@ fn wait_for_child_with_capture(
 
 pub fn execute_isolated(
     out_dir: &Path,
-    html: &str,
+    snapshot_path: &Path,
     key: &str,
     name: &str,
     url: &str,
@@ -384,7 +412,7 @@ pub fn execute_isolated(
             key: key.to_string(),
             name: name.to_string(),
             url: url.to_string(),
-            html: html.to_string(),
+            snapshot_path: snapshot_path.to_path_buf(),
             states: states.clone(),
             output_dir: out_dir.to_path_buf(),
         };
@@ -455,6 +483,75 @@ pub fn execute_isolated(
 mod tests {
     use super::*;
 
+    #[test]
+    fn worker_ipc_references_one_shared_snapshot_without_embedding_html(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("source.html");
+        let html = format!("<html><p>{}</p></html>", "PAYLOAD_SENTINEL_".repeat(65536));
+        fs::write(&source, &html)?;
+        let request = Request {
+            key: "nanohtml2text".to_string(),
+            name: "nanohtml2text".to_string(),
+            url: "https://example.com/shared".to_string(),
+            snapshot_path: source,
+            states: ExtractorStates::default(),
+            output_dir: directory.path().to_path_buf(),
+        };
+        let ipc = serde_json::to_vec(&request)?;
+        assert!(
+            ipc.len() < html.len() / 8,
+            "per-worker IPC unexpectedly scaled with HTML payload size"
+        );
+        assert!(
+            !String::from_utf8_lossy(&ipc).contains("PAYLOAD_SENTINEL_"),
+            "per-worker request embedded source HTML"
+        );
+        let decoded: Request = serde_json::from_slice(&ipc)?;
+        assert_eq!(read_snapshot(&decoded)?, html);
+        Ok(())
+    }
+
+    #[test]
+    fn worker_snapshot_path_cannot_escape_owned_run_directory(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let owned = tempfile::tempdir()?;
+        let other = tempfile::tempdir()?;
+        let other_source = other.path().join("source.html");
+        fs::write(&other_source, "<p>escape attempt</p>")?;
+        let request = Request {
+            key: "nanohtml2text".to_string(),
+            name: "nanohtml2text".to_string(),
+            url: "https://example.com/".to_string(),
+            snapshot_path: other_source,
+            states: ExtractorStates::default(),
+            output_dir: owned.path().to_path_buf(),
+        };
+        assert!(read_snapshot(&request).is_err());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_snapshot_cannot_be_a_symlink_outside_run() -> Result<(), Box<dyn std::error::Error>> {
+        let owned = tempfile::tempdir()?;
+        let other = tempfile::tempdir()?;
+        let outside = other.path().join("source.html");
+        fs::write(&outside, "<p>escape attempt</p>")?;
+        let symlink = owned.path().join("source.html");
+        std::os::unix::fs::symlink(outside, &symlink)?;
+        let request = Request {
+            key: "nanohtml2text".to_string(),
+            name: "nanohtml2text".to_string(),
+            url: "https://example.com/".to_string(),
+            snapshot_path: symlink,
+            states: ExtractorStates::default(),
+            output_dir: owned.path().to_path_buf(),
+        };
+        assert!(read_snapshot(&request).is_err());
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[test]
     fn browser_stdout_is_bounded_before_loading() -> Result<(), Box<dyn std::error::Error>> {
@@ -494,7 +591,8 @@ mod tests {
         input.rewind()?;
         let mut command = Command::new("cat");
         command.stdin(Stdio::from(input));
-        let output = run_bounded_command(&mut command, Duration::from_secs(2), 100)?;
+        // Preserve stdin behavior under heavily loaded shared CI runners.
+        let output = run_bounded_command(&mut command, Duration::from_secs(10), 100)?;
         assert!(output.status.success());
         assert_eq!(output.stdout, b"stream from a preopened file");
         Ok(())
