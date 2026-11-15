@@ -244,3 +244,60 @@ fn oversized_native_and_external_outputs_are_explicit_failures(
     }
     Ok(())
 }
+
+#[test]
+fn offline_snapshot_accepts_original_url_and_rejects_invalid_scheme(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let source = root.path().join("snapshot.html");
+    fs::write(
+        &source,
+        "<html><head><title>Reference</title></head><body><main><article><h1>Link resolution validation</h1><p>Documentation explains a transfer method from this captured page.</p><p><a href=\"/relative-resource-identifier\">Read documentation</a> with all the details.</p></article></main></body></html>",
+    )?;
+    let cli = env!("CARGO_BIN_EXE_html-to-text-comparison");
+    let output = Command::new(cli)
+        .args([
+            "--extractor",
+            "nanohtml2text",
+            "--base-url",
+            "https://original.example/test/",
+        ])
+        .arg(&source)
+        .current_dir(root.path())
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let extracted = fs::read_to_string(root.path().join("out/webforai.txt"))?;
+    assert!(
+        extracted.contains("](https://original.example/relative-resource-identifier)"),
+        "relative link did not resolve against captured URL: {extracted}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("out/source.html"))?,
+        fs::read_to_string(&source)?
+    );
+    let rejected = Command::new(cli)
+        .args(["--extractor", "nanohtml2text", "--base-url", "file:///tmp/"])
+        .arg(source)
+        .current_dir(root.path())
+        .output()?;
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("http or https"));
+    let url_input = Command::new(cli)
+        .args([
+            "--extractor",
+            "nanohtml2text",
+            "--base-url",
+            "https://example.com/source",
+            "https://example.invalid/no-fetch",
+        ])
+        .current_dir(root.path())
+        .output()?;
+    assert!(!url_input.status.success());
+    assert!(String::from_utf8_lossy(&url_input.stderr)
+        .contains("only applies to a local HTML snapshot"));
+    Ok(())
+}
