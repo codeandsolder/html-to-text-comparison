@@ -31,6 +31,7 @@ jobs:
         uv run --no-project --with-requirements tools/extractors/python/resiliparse/requirements.txt -- python3 -c 'from resiliparse.extract.html2text import extract_plain_text'
         cargo test --locked --all-targets --all-features -- --skip scores::tests::e2m_handles_images_without_image_paths
         # Vote-web is a separate Rust 1.99 crate with its own lock file.
+        rustup component add --toolchain 1.99.1 rustfmt clippy
         cargo fmt --manifest-path vote-web/Cargo.toml --all -- --check
         node --check vote-web/static/app.js
         cargo clippy --manifest-path vote-web/Cargo.toml --locked --all-targets -- -D warnings
