@@ -7,14 +7,38 @@
   "packageRules": [
     {
       "description": "E2M integration is release-tier and must not merge without an explicit heavy test",
-      "matchManagers": ["pip_requirements"],
-      "matchPackageNames": ["wisup-e2m"],
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchPackageNames": [
+        "wisup-e2m"
+      ],
       "automerge": false
     },
     {
       "description": "JS extraction engine and DOM dependencies must pass real content comparisons",
-      "matchManagers": ["npm"],
-      "matchPackageNames": ["@mozilla/readability", "linkedom", "defuddle", "cloakbrowser", "playwright-core", "node-html-markdown"],
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "@mozilla/readability",
+        "linkedom",
+        "defuddle",
+        "cloakbrowser",
+        "playwright-core",
+        "node-html-markdown"
+      ],
+      "automerge": false
+    },
+    {
+      "description": "CloakBrowser 0.7.2 declares playwright-core >=1.53 and <1.65; do not propose an un-installable browser pair",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "playwright-core"
+      ],
+      "allowedVersions": "<1.65.0",
       "automerge": false
     }
   ],
@@ -22,8 +46,12 @@
     {
       "customType": "regex",
       "description": "Track uv bootstrap wheel pinned in CI",
-      "managerFilePatterns": ["/^\\.github/workflows/.*\\.ya?ml$/"],
-      "matchStrings": ["uv==(?<currentValue>[0-9][0-9.]+)"],
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.*\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "uv==(?<currentValue>[0-9][0-9.]+)"
+      ],
       "depNameTemplate": "uv",
       "datasourceTemplate": "pypi",
       "versioningTemplate": "pep440"
@@ -31,8 +59,12 @@
     {
       "customType": "regex",
       "description": "Track pinned jsdiff browser CDN version",
-      "managerFilePatterns": ["/^src/web_ui\\.html$/"],
-      "matchStrings": ["cdn\\.jsdelivr\\.net/npm/diff@(?<currentValue>[0-9][0-9.]+)/dist/diff\\.min\\.js"],
+      "managerFilePatterns": [
+        "/^src/web_ui\\.html$/"
+      ],
+      "matchStrings": [
+        "cdn\\.jsdelivr\\.net/npm/diff@(?<currentValue>[0-9][0-9.]+)/dist/diff\\.min\\.js"
+      ],
       "depNameTemplate": "diff",
       "datasourceTemplate": "npm"
     }
