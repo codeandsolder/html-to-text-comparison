@@ -102,3 +102,12 @@ to skip, Z to undo, or the matching touch buttons. SQLite keeps the full vote
 history and the Rankings view derives provisional Elo ratings. Acer serves the
 site through Certifex at https://extract-vote.onhir.eu (Tailscale only).
 The dataset, extraction outputs and votes stay on Acer, not in this Git repo.
+
+## Live extraction settings lab
+
+Use the fixed 20-page Hacker News corpus for interactive settings optimization
+with one engine and two independent pages. The tuner's standalone Axum mode,
+typed settings controls and deployment are documented in
+[docs/hn-settings-tuner.md](docs/hn-settings-tuner.md). The private dataset,
+baseline outputs and saved profiles remain on Acer; no network reacquisition
+occurs during live tuning.
