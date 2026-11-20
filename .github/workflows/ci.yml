@@ -23,7 +23,7 @@ jobs:
       command: |
         # Bootstrap the pinned uv wheel into runner-local ephemeral tooling.
         python3 -m venv "$RUNNER_TEMP/uv-bootstrap"
-        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.8"
+        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.9"
         export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
         PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts --no-audit --no-fund
         npm test --prefix tools/extractors
@@ -47,7 +47,7 @@ jobs:
       command: |
         # Bootstrap the pinned uv wheel into runner-local ephemeral tooling.
         python3 -m venv "$RUNNER_TEMP/uv-bootstrap"
-        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.8"
+        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.9"
         export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
         uv run --no-project --python 3.12 --with-requirements tools/extractors/python/e2m/requirements.txt -- python3 -c 'from wisup_e2m import HtmlParser'
         # Worker tests spawn the real binary, not a Rust test harness.
