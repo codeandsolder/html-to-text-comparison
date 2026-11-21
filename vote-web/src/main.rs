@@ -153,7 +153,7 @@ fn is_safe_name(name: &str) -> bool {
 }
 
 fn checksum(data: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(data))
+    hex::encode(Sha256::digest(data))
 }
 
 fn load_corpus(dataset: &Path) -> Result<(Vec<Page>, Vec<String>), Box<dyn std::error::Error>> {
@@ -779,6 +779,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checksum_matches_sha256_known_vector() {
+        assert_eq!(
+            checksum(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 
     #[test]
     fn name_validation_prevents_path_traversal() {
