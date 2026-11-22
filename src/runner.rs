@@ -260,6 +260,7 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::Runner;
+    use crate::runtime_config::ExecutionPolicy;
 
     #[test]
     fn typed_extractor_outcomes_preserve_legitimate_text() -> Result<(), Box<dyn std::error::Error>>
