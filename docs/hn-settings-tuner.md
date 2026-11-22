@@ -85,7 +85,7 @@ asset scripts together with the binary:
 }
 ```
 
-The asset directory contains the Node adapter script and uv requirements.
+The asset directory contains the Node adapter scripts and the explicitly provisioned Python reference runtimes/packages. See [the Python runtime setup](pipeline-cli.md#python-reference-extractors). Python previews require bubblewrap and enabled user namespaces; deploy the pre-provisioned asset tree together with the new binary.
 Webclaw and the Go binary are installed via stable user PATH links.
 
 The tuner uses the existing isolated worker process group, caps output,

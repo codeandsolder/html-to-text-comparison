@@ -23,7 +23,7 @@ I am particularly interested in picking one to use for [Scour](https://scour.ing
 
 ## Usage
 
-Install pinned Node extractor packages once (Python tools are managed through `uv`):
+Install pinned Node extractor packages once. Python reference extractors use explicitly provisioned interpreter/package trees, isolated by Linux bubblewrap:
 
 ```sh
 PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts --no-audit --no-fund
@@ -37,7 +37,7 @@ CLI results are written to `out/` with the original acquisition saved exactly on
 
 ### Dependency maintenance and additional extractors
 
-Renovate uses the shared [codeandsolder CI fleet policy](https://github.com/codeandsolder/ci-workflows/blob/main/renovate-fleet.json) to maintain Cargo, npm, pip-style requirement files, GitHub Actions SHA pins, the pinned CI `uv` bootstrap and the `diff` browser CDN version. Python extractors run via individual `tools/extractors/python/*/requirements.txt` files, so dependency upgrades stay independently reproducible. Major updates require review and tests; `wisup-e2m` requires the heavyweight release-tier integration test.
+Renovate uses the shared [codeandsolder CI fleet policy](https://github.com/codeandsolder/ci-workflows/blob/main/renovate-fleet.json) to maintain Cargo, npm, pip-style requirement files, GitHub Actions SHA pins, the pinned CI `uv` bootstrap and the `diff` browser CDN version. Python extractor dependencies are provisioned from individual `tools/extractors/python/*/requirements.txt` files using uv, outside conversion. See the explicit [Python runtime setup](docs/pipeline-cli.md#python-reference-extractors). Major updates require review and tests; `wisup-e2m` requires the heavyweight release-tier integration test.
 
 The comparison includes **Mozilla's upstream Readability JavaScript implementation** through `@mozilla/readability` + `linkedom`, **Defuddle** in strictly offline mode, **node-html-markdown** as a fast full-document baseline, **Resiliparse** as an independent Lexbor-based main-content plaintext extractor, and **webforai** as a locally run main-content Markdown engine with site adapters. All of these use the same captured bytes as the Rust/Python converters.
 

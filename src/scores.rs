@@ -969,12 +969,86 @@ fn run_mozilla_readability(
     run_node_snapshot_parser(policy, "mozilla-readability", html, None, &config)
 }
 
-fn python_requirements(policy: &ExecutionPolicy, name: &str) -> PathBuf {
-    policy
-        .extractor_assets
-        .join("python")
-        .join(name)
-        .join("requirements.txt")
+/// Launch only pre-provisioned, immutable Python environments. The asset
+/// directory selects the interpreter and its package tree together.
+fn run_python_snapshot(
+    policy: &ExecutionPolicy,
+    name: &str,
+    html: &str,
+    script: &str,
+    args: &[&str],
+) -> Result<String, String> {
+    let adapter = policy.extractor_assets.join("python").join(name);
+    let runtime = adapter
+        .join("runtime")
+        .canonicalize()
+        .map_err(|error| format!("{name}: missing provisioned Python runtime: {error}"))?;
+    let packages = adapter
+        .join("packages")
+        .canonicalize()
+        .map_err(|error| format!("{name}: missing provisioned Python packages: {error}"))?;
+    let mut input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+    input
+        .write_all(html.as_bytes())
+        .map_err(|error| error.to_string())?;
+    let script = format!("import sys; sys.path.insert(0, '/packages')\n{script}");
+    let output = std::process::Command::new("bwrap")
+        .args([
+            "--unshare-all",
+            "--unshare-user",
+            "--unshare-net",
+            "--disable-userns",
+            "--die-with-parent",
+            "--new-session",
+            "--clearenv",
+            "--setenv",
+            "HOME",
+            "/tmp",
+            "--setenv",
+            "LANG",
+            "C.UTF-8",
+            "--setenv",
+            "TMPDIR",
+            "/tmp",
+            "--ro-bind",
+            "/usr/lib",
+            "/usr/lib",
+            "--ro-bind-try",
+            "/usr/lib64",
+            "/usr/lib64",
+            "--ro-bind-try",
+            "/lib",
+            "/lib",
+            "--ro-bind-try",
+            "/lib64",
+            "/lib64",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/tmp",
+            "--ro-bind",
+        ])
+        .arg(runtime)
+        .args(["/runtime", "--ro-bind"])
+        .arg(packages)
+        .args(["/packages", "--ro-bind"])
+        .arg(input.path())
+        .args([
+            "/input.html",
+            "--chdir",
+            "/tmp",
+            "--",
+            "/runtime/bin/python3",
+            "-I",
+            "-B",
+            "-c",
+        ])
+        .arg(script)
+        .args(args)
+        .bounded_output(policy.max_output_bytes);
+    command_output_text(output, name)
 }
 
 /// Independent Lexbor-based content extractor operating exclusively on
@@ -984,8 +1058,6 @@ fn run_resiliparse(
     html: &str,
     cfg: &crate::extractor_config::ResiliparseConfig,
 ) -> Result<String, String> {
-    let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
-    std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
     let cfg_json = serde_json::to_string(cfg).map_err(|error| error.to_string())?;
     let script = r"import sys,json
 from pathlib import Path
@@ -996,14 +1068,13 @@ cfg['preserve_formatting']={'formatted':True,'plain':False,'minimal_html':'minim
 html=Path(sys.argv[1]).read_text(encoding='utf-8')
 print(extract_plain_text(html, **cfg), end='')
 ";
-    let out = std::process::Command::new("uv")
-        .args(["run", "--no-project", "--with-requirements"])
-        .arg(python_requirements(policy, "resiliparse"))
-        .args(["--", "python3", "-c", script])
-        .arg(input.path())
-        .arg(cfg_json)
-        .bounded_output(policy.max_output_bytes);
-    command_output_text(out, "resiliparse")
+    run_python_snapshot(
+        policy,
+        "resiliparse",
+        html,
+        script,
+        &["/input.html", &cfg_json],
+    )
 }
 
 fn run_trafilatura(
@@ -1011,22 +1082,16 @@ fn run_trafilatura(
     html: &str,
     cfg: &TrafilaturaConfig,
 ) -> Result<String, String> {
-    let tmp = std::env::temp_dir().join(format!("trafilatura_{}.html", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, html)
-        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let cfg_json = serde_json::to_string(cfg)
         .map_err(|error| format!("serializing configuration: {error}"))?;
     let script = r"import json, sys, trafilatura; cfg = json.loads(sys.argv[2]); html = open(sys.argv[1]).read(); result = trafilatura.extract(html, output_format='markdown', favor_precision=cfg['favor_precision'], favor_recall=cfg['favor_recall'], include_comments=cfg['include_comments'], include_tables=cfg['include_tables'], include_images=cfg['include_images'], include_formatting=cfg['include_formatting'], include_links=cfg['include_links'], deduplicate=cfg['deduplicate'], with_metadata=cfg['with_metadata']); print(result if result else '', end='')";
-    let out = std::process::Command::new("uv")
-        .args(["run", "--no-project", "--with-requirements"])
-        .arg(python_requirements(policy, "trafilatura"))
-        .args(["--", "python3", "-c", script])
-        .arg(&tmp)
-        .arg(cfg_json)
-        .bounded_output(policy.max_output_bytes);
-
-    let _ = std::fs::remove_file(&tmp);
-    command_output_text(out, "trafilatura")
+    run_python_snapshot(
+        policy,
+        "trafilatura",
+        html,
+        script,
+        &["/input.html", &cfg_json],
+    )
 }
 
 fn run_html2text_py(
@@ -1034,22 +1099,16 @@ fn run_html2text_py(
     html: &str,
     cfg: &Html2TextPythonConfig,
 ) -> Result<String, String> {
-    let tmp = std::env::temp_dir().join(format!("h2t_py_{}.html", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, html)
-        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let cfg_json = serde_json::to_string(cfg)
         .map_err(|error| format!("serializing configuration: {error}"))?;
     let script = r"from html2text import HTML2Text; import json, sys; cfg = json.loads(sys.argv[2]); h = HTML2Text(); h.ignore_links = cfg['ignore_links']; h.ignore_images = cfg['ignore_images']; h.ignore_emphasis = cfg['ignore_emphasis']; h.body_width = cfg['body_width']; h.unicode_snob = cfg['unicode_snob']; h.escape_snob = cfg['escape_snob']; h.inline_links = cfg['inline_links']; h.google_doc = cfg['google_doc']; h.dash_unordered_list = cfg['dash_unordered_list']; html = open(sys.argv[1]).read(); print(h.handle(html), end='')";
-    let out = std::process::Command::new("uv")
-        .args(["run", "--no-project", "--with-requirements"])
-        .arg(python_requirements(policy, "html2text"))
-        .args(["--", "python3", "-c", script])
-        .arg(&tmp)
-        .arg(cfg_json)
-        .bounded_output(policy.max_output_bytes);
-
-    let _ = std::fs::remove_file(&tmp);
-    command_output_text(out, "html2text.py")
+    run_python_snapshot(
+        policy,
+        "html2text",
+        html,
+        script,
+        &["/input.html", &cfg_json],
+    )
 }
 
 fn build_markdownify_config_json(cfg: &MarkdownifyConfig) -> Result<String, String> {
@@ -1153,22 +1212,16 @@ fn run_markdownify(
     html: &str,
     cfg: &MarkdownifyConfig,
 ) -> Result<String, String> {
-    let tmp = std::env::temp_dir().join(format!("markdownify_{}.html", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, html)
-        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let cfg_json = build_markdownify_config_json(cfg)
         .map_err(|error| format!("markdownify configuration invalid: {error}"))?;
     let script = r"from markdownify import markdownify as md; import json, sys; cfg = json.loads(sys.argv[2]); kwargs = {'autolinks': cfg['autolinks'], 'default_title': cfg['default_title'], 'heading_style': cfg['heading_style'], 'bullets': cfg['bullets'], 'strong_em_symbol': cfg['strong_em_symbol'], 'sub_symbol': cfg['sub_symbol'], 'sup_symbol': cfg['sup_symbol'], 'newline_style': cfg['newline_style'], 'code_language': cfg['code_language'], 'escape_asterisks': cfg['escape_asterisks'], 'escape_underscores': cfg['escape_underscores'], 'escape_misc': cfg['escape_misc'], 'keep_inline_images_in': cfg['keep_inline_images_in'], 'table_infer_header': cfg['table_infer_header'], 'wrap': cfg['wrap'], 'wrap_width': cfg['wrap_width']}; html = open(sys.argv[1]).read(); strip = cfg['strip']; convert = cfg['convert']; strip_document = cfg['strip_document']; strip_pre = cfg['strip_pre']; bs4_options = cfg['bs4_options']; kwargs['strip'] = strip if strip else None; kwargs['convert'] = convert if convert else None; kwargs['strip_document'] = strip_document; kwargs['strip_pre'] = strip_pre; kwargs['bs4_options'] = bs4_options; kwargs = {key: value for key, value in kwargs.items() if value is not None}; print(md(html, **kwargs), end='')";
-    let out = std::process::Command::new("uv")
-        .args(["run", "--no-project", "--with-requirements"])
-        .arg(python_requirements(policy, "markdownify"))
-        .args(["--", "python3", "-c", script])
-        .arg(&tmp)
-        .arg(cfg_json)
-        .bounded_output(policy.max_output_bytes);
-
-    let _ = std::fs::remove_file(&tmp);
-    command_output_text(out, "markdownify")
+    run_python_snapshot(
+        policy,
+        "markdownify",
+        html,
+        script,
+        &["/input.html", &cfg_json],
+    )
 }
 
 fn run_webclaw(
@@ -1215,20 +1268,18 @@ import json
 import sys
 from pathlib import Path
 
+import os
+os.environ["NLTK_DATA"] = "/packages/nltk_data"
 import nltk
+nltk.data.path[:] = ["/packages/nltk_data"]
 from wisup_e2m import HtmlParser
 
-# wisup-e2m pins an unstructured release whose built-in NLTK bundle URL
-# is no longer available. Use NLTK's supported package index instead.
+# Provision resource data alongside packages; never download on extraction.
 for category, resource in (
     ("tokenizers", "punkt_tab"),
     ("taggers", "averaged_perceptron_tagger_eng"),
 ):
-    try:
-        nltk.data.find(f"{category}/{resource}")
-    except LookupError:
-        if not nltk.download(resource, quiet=True, raise_on_error=True):
-            raise RuntimeError(f"Could not obtain NLTK resource {resource}")
+    nltk.data.find(f"{category}/{resource}")
 
 
 work_dir = Path(sys.argv[1]).resolve()
@@ -1291,28 +1342,16 @@ fn run_e2m(
     } else {
         &cfg.engine
     };
-    let work_dir = std::env::temp_dir().join(format!("e2m_{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&work_dir)
-        .map_err(|error| format!("creating e2m directory: {error}"))?;
-    let tmp = work_dir.join("input.html");
-    std::fs::write(&tmp, html)
-        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let langs = serde_json::to_string(&cfg.langs)
         .map_err(|error| format!("serializing e2m languages: {error}"))?;
-    let script = E2M_SCRIPT;
-    let out = std::process::Command::new("uv")
-        .args([
-            "run",
-            "--no-project",
-            "--python",
-            "3.12",
-            "--with-requirements",
-        ])
-        .arg(python_requirements(policy, "e2m"))
-        .args(["--", "python3", "-c", script])
-        .arg(&work_dir)
-        .arg(&tmp)
-        .args([
+    run_python_snapshot(
+        policy,
+        "e2m",
+        html,
+        E2M_SCRIPT,
+        &[
+            "/tmp",
+            "/input.html",
             engine,
             &langs,
             if cfg.skip_headers_and_footers {
@@ -1325,12 +1364,8 @@ fn run_e2m(
             } else {
                 "false"
             },
-        ])
-        .bounded_output(policy.max_output_bytes);
-
-    let _ = std::fs::remove_file(&tmp);
-    let _ = std::fs::remove_dir_all(&work_dir);
-    command_output_text(out, "e2m")
+        ],
+    )
 }
 
 fn build_html_to_markdown_go_args(
@@ -2307,6 +2342,59 @@ mod tests {
         )?;
         assert!(result.contains("Readability operates on one HTML snapshot"));
         assert!(!result.contains("Discard me"));
+        Ok(())
+    }
+
+    #[test]
+    fn python_snapshot_is_isolated_and_uses_pypy() -> Result<(), Box<dyn std::error::Error>> {
+        let outside = tempfile::NamedTempFile::new()?;
+        let host_net = std::fs::read_link("/proc/self/ns/net")?;
+        let output = run_python_snapshot(
+            &ExecutionPolicy::default(),
+            "html2text",
+            "fixture",
+            r"import os, sys, pathlib, html2text
+assert sys.implementation.name == 'pypy'
+assert sys.flags.isolated and sys.dont_write_bytecode
+assert pathlib.Path('/input.html').read_text() == 'fixture'
+assert not os.path.exists(sys.argv[1])
+assert os.readlink('/proc/self/ns/net') != sys.argv[2]
+assert os.environ['HOME'] == '/tmp'
+assert not os.path.exists('/home')
+assert not os.path.exists('/sys')
+for path in ['/packages', '/runtime', '/input.html']:
+    try:
+        with open(path + ('/sandbox-probe' if path != '/input.html' else ''), 'w'):
+            pass
+    except OSError:
+        continue
+    raise AssertionError('writable read-only mount: ' + path)
+pathlib.Path('/tmp/sandbox-probe').write_text('scratch')
+print('isolated')
+",
+            &[
+                outside.path().to_str().ok_or("invalid fixture path")?,
+                host_net.to_str().ok_or("invalid namespace name")?,
+            ],
+        )?;
+        assert_eq!(output.trim(), "isolated");
+        Ok(())
+    }
+
+    #[test]
+    fn unprovisioned_python_snapshot_fails_without_fallback(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let assets = tempfile::tempdir()?;
+        let policy = ExecutionPolicy {
+            extractor_assets: assets.path().to_owned(),
+            ..Default::default()
+        };
+        let result =
+            run_python_snapshot(&policy, "html2text", "fixture", "print('unexpected')", &[]);
+        assert!(
+            matches!(result, Err(ref error) if error.contains("missing provisioned Python runtime")),
+            "{result:?}"
+        );
         Ok(())
     }
 
