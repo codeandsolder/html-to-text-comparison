@@ -15,10 +15,9 @@ permissions:
 
 jobs:
   rust:
-    name: Rust 1.99.1 (shared sccache)
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@9190509a6314e35770f27b70dc771d14227e95aa # main
+    name: Rust
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@8e1f9d2c450e4761884b72a00a2f324e87a3f3cb # main
     with:
-      rust-toolchain: "1.99.1"
       timeout-minutes: 45
       command: |
         # Bootstrap the pinned uv wheel into runner-local ephemeral tooling.
@@ -30,8 +29,7 @@ jobs:
         uv run --no-project --with-requirements tools/extractors/python/trafilatura/requirements.txt -- python3 -c 'import trafilatura'
         uv run --no-project --with-requirements tools/extractors/python/resiliparse/requirements.txt -- python3 -c 'from resiliparse.extract.html2text import extract_plain_text'
         cargo test --locked --all-targets --all-features -- --skip scores::tests::e2m_handles_images_without_image_paths
-        # Vote-web is a separate Rust 1.99 crate with its own lock file.
-        rustup component add --toolchain 1.99.1 rustfmt clippy
+        # Vote-web has its own lock file; it shares the same native compiler pin.
         cargo fmt --manifest-path vote-web/Cargo.toml --all -- --check
         node --check vote-web/static/app.js
         cargo clippy --manifest-path vote-web/Cargo.toml --locked --all-targets -- -D warnings
@@ -39,10 +37,9 @@ jobs:
 
   e2m-integration:
     name: E2M heavyweight integration (release tier)
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@9190509a6314e35770f27b70dc771d14227e95aa # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@8e1f9d2c450e4761884b72a00a2f324e87a3f3cb # main
     with:
       validation-tier: "release"
-      rust-toolchain: "1.99.1"
       timeout-minutes: 45
       command: |
         # Bootstrap the pinned uv wheel into runner-local ephemeral tooling.
