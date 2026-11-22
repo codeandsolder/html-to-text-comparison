@@ -75,7 +75,10 @@ impl Acquisition {
             Self::Cloakbrowser => {
                 let script = policy.extractor_assets.join("cloakbrowser-acquire.mjs");
                 let mut command = std::process::Command::new("node");
-                command.arg(script).arg(url.as_str());
+                command
+                    .env_remove("NODE_PATH")
+                    .arg(script)
+                    .arg(url.as_str());
                 let output = crate::worker::run_captured_command(
                     command,
                     policy.browser_timeout(),

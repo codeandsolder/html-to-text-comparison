@@ -17,7 +17,7 @@ The Rust converter contract is `Result<String, String>`. A text document beginni
 
 | Extractor | Execution | Input and configuration |
 |---|---|---|
-| Turndown | `node -e` with pinned `turndown` module | HTML scratch file; `TurndownConfig` serialized to JS options |
+| Turndown | `snapshot-parsers.mjs turndown` with pinned `turndown` module | HTML scratch file; `TurndownConfig` serialized to JS options |
 | Percollate | Pinned `percollate/cli.js md -o -` | HTML scratch file; Markdown options from `PercollateConfig` |
 | Resiliparse | uv with pinned requirements in tools/extractors/python/resiliparse/requirements.txt | Already-acquired HTML snapshot, Lexbor-based main-content plaintext extraction |
 | Trafilatura | `uv run --no-project --with-requirements tools/extractors/python/trafilatura/requirements.txt` | HTML scratch file and JSON flags |
@@ -25,13 +25,13 @@ The Rust converter contract is `Result<String, String>`. A text document beginni
 | Markdownify | `uv run --no-project --with-requirements tools/extractors/python/markdownify/requirements.txt` | HTML scratch file and serialized options |
 | Defuddle | `node tools/extractors/snapshot-parsers.mjs defuddle` | Snapshot file and original URL; `defuddle/node` with `useAsync:false`, never remote fallback |
 | node-html-markdown | `node tools/extractors/snapshot-parsers.mjs node-html-markdown` | Local full-document conversion, no fetching |
-| Mozilla Readability | `node -e` with `@mozilla/readability` + `linkedom` | Local HTML file; full upstream JS algorithm, no navigation |
+| Mozilla Readability | `snapshot-parsers.mjs mozilla-readability` with `@mozilla/readability` + `linkedom` | Local HTML file; full upstream JS algorithm, no navigation |
 | webforai | Node module webforai pinned in npm lockfile | Acquired HTML and source URL for local link resolution; no network fetch |
 | Webclaw | `webclaw` or `execution.webclaw_bin` | Temporary HTML file plus configured CLI arguments |
 | E2M | `uv run --no-project --python 3.12 --with-requirements tools/extractors/python/e2m/requirements.txt` | HTML scratch file, language/engine/processing flags; release-tier integration test |
 | html-to-markdown-go | `html2markdown` or `execution.html_to_markdown_go_bin` | Seekable file attached as stdin to avoid stdout/pipe deadlock; plugin flags |
 
-The worker sets `TMPDIR`/`TMP`/`TEMP` to the parent-owned IPC directory, so child scratch files are removed even if the process group is forcibly terminated. Pinned npm packages live under `tools/extractors/node_modules` or the `execution.node_modules` override.
+The worker sets `TMPDIR`/`TMP`/`TEMP` to the parent-owned IPC directory, so child scratch files are removed even if the process group is forcibly terminated. All Node scripts and their adjacent `node_modules` installation come from the one explicit `execution.extractor_assets` root (default `tools/extractors`); subprocesses do not inherit `NODE_PATH`, and direct ESM package imports must resolve inside the selected installation.
 
 ## Timing and benchmark interpretation
 

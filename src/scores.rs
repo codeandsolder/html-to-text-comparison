@@ -729,7 +729,7 @@ pub fn run_cli_extractor(
             } else {
                 serde_json::json!({})
             };
-            run_node_snapshot_parser(policy, extractor_key, html, parsed_url, &node_config)
+            run_node_snapshot_parser(policy, extractor_key, html, Some(parsed_url), &node_config)
         }
         "markdownify" => run_markdownify(
             policy,
@@ -836,9 +836,6 @@ fn run_turndown(
     cfg: &TurndownConfig,
     remove_tags: &[&str],
 ) -> Result<String, String> {
-    let tmp = std::env::temp_dir().join(format!("turndown_{}.html", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, html)
-        .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let options = serde_json::json!({
         "headingStyle": cfg.heading_style,
         "hr": cfg.hr,
@@ -851,19 +848,8 @@ fn run_turndown(
         "linkReferenceStyle": cfg.link_reference_style,
         "preformattedCode": cfg.preformatted_code,
     });
-    let remove_tags_json = serde_json::to_string(remove_tags).unwrap_or_else(|_| "[]".to_string());
-    let node_code = r"const fs = require('fs'); const td = require('turndown'); const options = JSON.parse(process.argv[2]); const removeTags = JSON.parse(process.argv[3]); const svc = new td(options); for (const tag of removeTags) svc.remove(tag); const html = fs.readFileSync(process.argv[1], 'utf8'); process.stdout.write(svc.turndown(html))";
-    let out = std::process::Command::new("node")
-        .env("NODE_PATH", &policy.node_modules)
-        .arg("-e")
-        .arg(node_code)
-        .arg(&tmp)
-        .arg(options.to_string())
-        .arg(remove_tags_json)
-        .bounded_output(policy.max_output_bytes);
-
-    let _ = std::fs::remove_file(&tmp);
-    command_output_text(out, "turndown")
+    let config = serde_json::json!({"options": options, "remove_tags": remove_tags});
+    run_node_snapshot_parser(policy, "turndown", html, None, &config)
 }
 
 fn normalize_percollate_marker(value: &str, allowed: &[char]) -> Option<char> {
@@ -890,8 +876,8 @@ fn build_percollate_args(
 ) -> Vec<String> {
     let mut args = vec![
         policy
-            .node_modules
-            .join("percollate/cli.js")
+            .extractor_assets
+            .join("node_modules/percollate/cli.js")
             .display()
             .to_string(),
         "md".to_string(),
@@ -940,6 +926,7 @@ fn run_percollate(
         .map_err(|error| format!("writing temporary extractor input: {error}"))?;
     let args = build_percollate_args(policy, &tmp, cfg);
     let out = std::process::Command::new("node")
+        .env_remove("NODE_PATH")
         .args(&args)
         .bounded_output(policy.max_output_bytes);
 
@@ -951,19 +938,23 @@ fn run_node_snapshot_parser(
     policy: &ExecutionPolicy,
     kind: &str,
     html: &str,
-    url: &url::Url,
+    url: Option<&url::Url>,
     config: &serde_json::Value,
 ) -> Result<String, String> {
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
     let script = policy.extractor_assets.join("snapshot-parsers.mjs");
-    let output = std::process::Command::new("node")
+    let mut command = std::process::Command::new("node");
+    command
+        .env_remove("NODE_PATH")
         .arg(script)
         .arg(kind)
         .arg(input.path())
-        .arg(url.as_str())
-        .arg(config.to_string())
-        .bounded_output(policy.max_output_bytes);
+        .arg(config.to_string());
+    if let Some(url) = url {
+        command.arg(url.as_str());
+    }
+    let output = command.bounded_output(policy.max_output_bytes);
     command_output_text(output, kind)
 }
 
@@ -974,35 +965,8 @@ fn run_mozilla_readability(
     html: &str,
     cfg: &crate::extractor_config::MozillaReadabilityConfig,
 ) -> Result<String, String> {
-    let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
-    std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
-    let cfg_json = serde_json::to_string(cfg).map_err(|error| error.to_string())?;
-    let script = r"const fs = require('fs');
-const {parseHTML} = require('linkedom');
-const {Readability} = require('@mozilla/readability');
-const html = fs.readFileSync(process.argv[1], 'utf8');
-const cfg = JSON.parse(process.argv[2]);
-const {document} = parseHTML(html);
-const opts = {
-  maxElemsToParse: cfg.max_elems_to_parse,
-  nbTopCandidates: cfg.nb_top_candidates,
-  charThreshold: cfg.char_threshold,
-  keepClasses: cfg.keep_classes,
-  classesToPreserve: cfg.classes_to_preserve,
-  disableJSONLD: cfg.disable_json_ld,
-  linkDensityModifier: cfg.link_density_modifier
-};
-const result = new Readability(document, opts).parse();
-if (!result) { console.error('No readable content'); process.exit(2); }
-process.stdout.write(result.textContent || '');
-";
-    let out = std::process::Command::new("node")
-        .env("NODE_PATH", &policy.node_modules)
-        .args(["-e", script])
-        .arg(input.path())
-        .arg(cfg_json)
-        .bounded_output(policy.max_output_bytes);
-    command_output_text(out, "mozilla-readability")
+    let config = serde_json::to_value(cfg).map_err(|error| error.to_string())?;
+    run_node_snapshot_parser(policy, "mozilla-readability", html, None, &config)
 }
 
 fn python_requirements(policy: &ExecutionPolicy, name: &str) -> PathBuf {
@@ -2343,6 +2307,51 @@ mod tests {
         )?;
         assert!(result.contains("Readability operates on one HTML snapshot"));
         assert!(!result.contains("Discard me"));
+        Ok(())
+    }
+
+    #[test]
+    fn node_launches_use_one_explicit_asset_tree() -> Result<(), Box<dyn std::error::Error>> {
+        let assets = tempfile::tempdir()?;
+        std::fs::write(
+            assets.path().join("snapshot-parsers.mjs"),
+            r"import { readFileSync } from 'node:fs';
+const [kind, input, config, url] = process.argv.slice(2);
+if (process.env.NODE_PATH !== undefined) throw new Error('ambient NODE_PATH');
+if (readFileSync(input, 'utf8') !== '<p>snapshot</p>') throw new Error('wrong snapshot');
+JSON.parse(config);
+process.stdout.write(kind + ':' + (url ?? 'no-url'));
+",
+        )?;
+        let policy = ExecutionPolicy {
+            extractor_assets: assets.path().to_owned(),
+            ..Default::default()
+        };
+        let html = "<p>snapshot</p>";
+        assert_eq!(
+            run_turndown(&policy, html, &TurndownConfig::default(), &[])?,
+            "turndown:no-url",
+        );
+        assert_eq!(
+            run_mozilla_readability(
+                &policy,
+                html,
+                &crate::extractor_config::MozillaReadabilityConfig::default()
+            )?,
+            "mozilla-readability:no-url",
+        );
+        let url = url::Url::parse("https://example.com/")?;
+        for kind in ["defuddle", "node-html-markdown", "webforai"] {
+            assert_eq!(
+                run_node_snapshot_parser(&policy, kind, html, Some(&url), &serde_json::json!({}))?,
+                format!("{kind}:{url}"),
+            );
+        }
+        let args = build_percollate_args(&policy, assets.path(), &PercollateConfig::default());
+        assert_eq!(
+            std::path::Path::new(&args[0]),
+            assets.path().join("node_modules/percollate/cli.js")
+        );
         Ok(())
     }
 
