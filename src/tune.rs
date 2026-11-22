@@ -310,7 +310,11 @@ fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, Str
         });
     }
 
-    let (engines, baseline, names) = load_baselines(root, shortlist, &stories, &policy)?;
+    let LoadedBaselines {
+        engines,
+        outputs,
+        names,
+    } = load_baselines(root, shortlist, &stories, &policy)?;
     fs::create_dir_all(state_dir).map_err(|e| e.to_string())?;
     let profile_path = state_dir.join("profiles.json");
     let stored: HashMap<String, Value> = if profile_path.is_file() {
@@ -334,7 +338,7 @@ fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, Str
         indices: Arc::new(indices),
         engines: Arc::new(engines),
         names: Arc::new(names),
-        baseline: Arc::new(baseline),
+        baseline: Arc::new(outputs),
         profiles: Arc::new(RwLock::new(valid_profiles)),
         profile_path: Arc::new(profile_path),
         cache: Arc::new(Mutex::new(ResultCache::default())),
@@ -345,12 +349,18 @@ fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, Str
 
 type BaselineOutputs = HashMap<(String, String), Arc<str>>;
 
+struct LoadedBaselines {
+    engines: HashMap<String, EngineInfo>,
+    outputs: BaselineOutputs,
+    names: Vec<String>,
+}
+
 fn load_baselines(
     root: &std::path::Path,
     shortlist: Shortlist,
     stories: &[Story],
     policy: &ExecutionPolicy,
-) -> Result<(HashMap<String, EngineInfo>, BaselineOutputs, Vec<String>), String> {
+) -> Result<LoadedBaselines, String> {
     let registry = ExtractorStates::default();
     let mut engines = HashMap::new();
     let mut baseline = HashMap::new();
@@ -394,7 +404,11 @@ fn load_baselines(
             baseline.insert((story.id.clone(), name.clone()), Arc::from(output));
         }
     }
-    Ok((engines, baseline, names))
+    Ok(LoadedBaselines {
+        engines,
+        outputs: baseline,
+        names,
+    })
 }
 
 fn clip(text: String) -> (String, bool) {
