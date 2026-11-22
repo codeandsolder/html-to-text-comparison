@@ -5,6 +5,7 @@ mod metrics;
 mod runner;
 mod runtime_config;
 mod scores;
+mod tune;
 mod web;
 mod worker;
 
@@ -47,7 +48,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    if arguments.first().is_some_and(|arg| arg == "--server") {
+    if arguments.first().is_some_and(|arg| arg == "--tune-server") {
+        if arguments.len() != 1 {
+            return Err("--tune-server takes no positional arguments; use --config".into());
+        }
+        let tuner = config
+            .tuner
+            .ok_or("--tune-server requires a tuner configuration")?;
+        tune::serve(tuner, config.execution).await?;
+    } else if arguments.first().is_some_and(|arg| arg == "--server") {
         if arguments.len() != 1 {
             return Err("--server takes no positional arguments; use --config".into());
         }
@@ -66,6 +75,7 @@ fn print_usage(program: &str) {
     eprintln!("  {program} [--config FILE] --extractor NAME [--base-url URL] <url_or_file>     Run one extractor");
     eprintln!("  {program} [--config FILE] --acquire {{http|lightpanda|cloakbrowser}} [--extractor NAME] <url>     One acquisition");
     eprintln!("  {program} [--config FILE] --server     Start web server");
+    eprintln!("  {program} --config FILE --tune-server     Start settings tuner");
 }
 
 fn run_cli(

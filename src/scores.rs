@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, read_to_string};
-use std::io::{Read, Seek, Write};
+#[cfg(feature = "reader-lm-api")]
+use std::io::Read;
+use std::io::{Seek, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -362,13 +364,31 @@ pub fn run_named_extractor(
         }
         #[cfg(feature = "fast_html2md")]
         "fast_html2md" => {
-            runner.run(output_name, |html| {
-                Ok(fast_html2md::parse_html(html, false))
+            let cfg = states
+                .states
+                .get("fast_html2md")
+                .map_or_default(|s| s.config.fast_html2md.clone());
+            runner.run(output_name, move |html| {
+                if cfg.preserve_spans {
+                    Ok(fast_html2md::parse_html_extended(html, cfg.commonmark))
+                } else {
+                    Ok(fast_html2md::parse_html(html, cfg.commonmark))
+                }
             });
         }
         #[cfg(feature = "html2md")]
         "html2md" => {
-            runner.run(output_name, |html| Ok(html2md::parse_html(html)));
+            let cfg = states
+                .states
+                .get("html2md")
+                .map_or_default(|s| s.config.html2md.clone());
+            runner.run(output_name, move |html| {
+                if cfg.preserve_spans {
+                    Ok(html2md::parse_html_extended(html))
+                } else {
+                    Ok(html2md::parse_html(html))
+                }
+            });
         }
         #[cfg(feature = "mdream")]
         "mdream" => {
@@ -665,7 +685,14 @@ pub fn run_cli_extractor(
                 .get("percollate")
                 .map_or_default(|s| s.config.percollate.clone()),
         ),
-        "resiliparse" => run_resiliparse(policy, html),
+        "resiliparse" => run_resiliparse(
+            policy,
+            html,
+            &states
+                .states
+                .get("resiliparse")
+                .map_or_default(|s| s.config.resiliparse.clone()),
+        ),
         "trafilatura" => run_trafilatura(
             policy,
             html,
@@ -682,9 +709,27 @@ pub fn run_cli_extractor(
                 .get("html2text-py")
                 .map_or_default(|s| s.config.html2text_py.clone()),
         ),
-        "mozilla-readability" => run_mozilla_readability(policy, html),
+        "mozilla-readability" => run_mozilla_readability(
+            policy,
+            html,
+            &states
+                .states
+                .get("mozilla-readability")
+                .map_or_default(|s| s.config.mozilla_readability.clone()),
+        ),
         "defuddle" | "node-html-markdown" | "webforai" => {
-            run_node_snapshot_parser(policy, extractor_key, html, parsed_url)
+            let node_config = if extractor_key == "node-html-markdown" {
+                serde_json::to_value(
+                    states
+                        .states
+                        .get(extractor_key)
+                        .map_or_default(|s| s.config.node_html_markdown.clone()),
+                )
+                .map_err(|error| error.to_string())?
+            } else {
+                serde_json::json!({})
+            };
+            run_node_snapshot_parser(policy, extractor_key, html, parsed_url, &node_config)
         }
         "markdownify" => run_markdownify(
             policy,
@@ -706,34 +751,41 @@ pub fn run_cli_extractor(
                 .map_or_default(|s| s.config.html_to_markdown_go.clone()),
         ),
         #[cfg(feature = "reader-lm-api")]
-        "reader-lm-api" => {
-            let key = std::env::var("JINA_API_KEY")
-                .map_err(|error| format!("reader-lm-api missing API key: {error}"))?;
-            // Jina accepts the acquired HTML. The original URL is only a
-            // base for relative links; sending it alone would re-fetch the site.
-            let response = ureq::post("https://r.jina.ai/")
-                .header("authorization", &format!("Bearer {key}"))
-                .send_json(serde_json::json!({
-                    "html": html,
-                    "url": parsed_url.as_str()
-                }))
-                .map_err(|error| format!("reader-lm-api request failed: {error}"))?;
-            let limit = policy.max_output_bytes;
-            let mut body = Vec::new();
-            response
-                .into_body()
-                .into_reader()
-                .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
-                .read_to_end(&mut body)
-                .map_err(|error| format!("reader-lm-api read failed: {error}"))?;
-            if body.len() > limit {
-                return Err(format!("reader-lm-api output exceeds {limit} byte limit"));
-            }
-            String::from_utf8(body)
-                .map_err(|error| format!("reader-lm-api returned invalid UTF-8: {error}"))
-        }
+        "reader-lm-api" => run_reader_lm(policy, html, parsed_url),
         _ => Err(format!("unknown extractor: {extractor_key}")),
     }
+}
+
+#[cfg(feature = "reader-lm-api")]
+fn run_reader_lm(
+    policy: &ExecutionPolicy,
+    html: &str,
+    parsed_url: &url::Url,
+) -> Result<String, String> {
+    let key = std::env::var("JINA_API_KEY")
+        .map_err(|error| format!("reader-lm-api missing API key: {error}"))?;
+    // Jina accepts the acquired HTML. The original URL is only a
+    // base for relative links; sending it alone would re-fetch the site.
+    let response = ureq::post("https://r.jina.ai/")
+        .header("authorization", &format!("Bearer {key}"))
+        .send_json(serde_json::json!({
+            "html": html,
+            "url": parsed_url.as_str()
+        }))
+        .map_err(|error| format!("reader-lm-api request failed: {error}"))?;
+    let limit = policy.max_output_bytes;
+    let mut body = Vec::new();
+    response
+        .into_body()
+        .into_reader()
+        .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut body)
+        .map_err(|error| format!("reader-lm-api read failed: {error}"))?;
+    if body.len() > limit {
+        return Err(format!("reader-lm-api output exceeds {limit} byte limit"));
+    }
+    String::from_utf8(body)
+        .map_err(|error| format!("reader-lm-api returned invalid UTF-8: {error}"))
 }
 
 // Keep external converter descendants in their isolated worker's process
@@ -900,52 +952,92 @@ fn run_node_snapshot_parser(
     kind: &str,
     html: &str,
     url: &url::Url,
+    config: &serde_json::Value,
 ) -> Result<String, String> {
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tools/extractors/snapshot-parsers.mjs");
+    let script = policy.extractor_assets.join("snapshot-parsers.mjs");
     let output = std::process::Command::new("node")
         .arg(script)
         .arg(kind)
         .arg(input.path())
         .arg(url.as_str())
+        .arg(config.to_string())
         .bounded_output(policy.max_output_bytes);
     command_output_text(output, kind)
 }
 
 /// The original Mozilla Readability JS implementation. The DOM is built
 /// from the *acquired HTML snapshot*; no browser navigation or website fetch.
-fn run_mozilla_readability(policy: &ExecutionPolicy, html: &str) -> Result<String, String> {
+fn run_mozilla_readability(
+    policy: &ExecutionPolicy,
+    html: &str,
+    cfg: &crate::extractor_config::MozillaReadabilityConfig,
+) -> Result<String, String> {
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
-    let script = r"const fs = require('fs'); const {parseHTML} = require('linkedom'); const {Readability} = require('@mozilla/readability'); const html = fs.readFileSync(process.argv[1], 'utf8'); const {document} = parseHTML(html); const result = new Readability(document).parse(); if (!result) { console.error('No readable content'); process.exit(2); } process.stdout.write(result.textContent || '')";
+    let cfg_json = serde_json::to_string(cfg).map_err(|error| error.to_string())?;
+    let script = r"const fs = require('fs');
+const {parseHTML} = require('linkedom');
+const {Readability} = require('@mozilla/readability');
+const html = fs.readFileSync(process.argv[1], 'utf8');
+const cfg = JSON.parse(process.argv[2]);
+const {document} = parseHTML(html);
+const opts = {
+  maxElemsToParse: cfg.max_elems_to_parse,
+  nbTopCandidates: cfg.nb_top_candidates,
+  charThreshold: cfg.char_threshold,
+  keepClasses: cfg.keep_classes,
+  classesToPreserve: cfg.classes_to_preserve,
+  disableJSONLD: cfg.disable_json_ld,
+  linkDensityModifier: cfg.link_density_modifier
+};
+const result = new Readability(document, opts).parse();
+if (!result) { console.error('No readable content'); process.exit(2); }
+process.stdout.write(result.textContent || '');
+";
     let out = std::process::Command::new("node")
         .env("NODE_PATH", &policy.node_modules)
         .args(["-e", script])
         .arg(input.path())
+        .arg(cfg_json)
         .bounded_output(policy.max_output_bytes);
     command_output_text(out, "mozilla-readability")
 }
 
-fn python_requirements(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tools/extractors/python")
+fn python_requirements(policy: &ExecutionPolicy, name: &str) -> PathBuf {
+    policy
+        .extractor_assets
+        .join("python")
         .join(name)
         .join("requirements.txt")
 }
 
 /// Independent Lexbor-based content extractor operating exclusively on
 /// the acquired HTML, with no URL or network access.
-fn run_resiliparse(policy: &ExecutionPolicy, html: &str) -> Result<String, String> {
+fn run_resiliparse(
+    policy: &ExecutionPolicy,
+    html: &str,
+    cfg: &crate::extractor_config::ResiliparseConfig,
+) -> Result<String, String> {
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
-    let script = r"import sys; from pathlib import Path; from resiliparse.extract.html2text import extract_plain_text; html = Path(sys.argv[1]).read_text(encoding='utf-8'); print(extract_plain_text(html, main_content=True, preserve_formatting=True), end='')";
+    let cfg_json = serde_json::to_string(cfg).map_err(|error| error.to_string())?;
+    let script = r"import sys,json
+from pathlib import Path
+from resiliparse.extract.html2text import extract_plain_text
+cfg=json.loads(sys.argv[2])
+mode=cfg.pop('formatting_mode')
+cfg['preserve_formatting']={'formatted':True,'plain':False,'minimal_html':'minimal_html'}[mode]
+html=Path(sys.argv[1]).read_text(encoding='utf-8')
+print(extract_plain_text(html, **cfg), end='')
+";
     let out = std::process::Command::new("uv")
         .args(["run", "--no-project", "--with-requirements"])
-        .arg(python_requirements("resiliparse"))
+        .arg(python_requirements(policy, "resiliparse"))
         .args(["--", "python3", "-c", script])
         .arg(input.path())
+        .arg(cfg_json)
         .bounded_output(policy.max_output_bytes);
     command_output_text(out, "resiliparse")
 }
@@ -963,7 +1055,7 @@ fn run_trafilatura(
     let script = r"import json, sys, trafilatura; cfg = json.loads(sys.argv[2]); html = open(sys.argv[1]).read(); result = trafilatura.extract(html, output_format='markdown', favor_precision=cfg['favor_precision'], favor_recall=cfg['favor_recall'], include_comments=cfg['include_comments'], include_tables=cfg['include_tables'], include_images=cfg['include_images'], include_formatting=cfg['include_formatting'], include_links=cfg['include_links'], deduplicate=cfg['deduplicate'], with_metadata=cfg['with_metadata']); print(result if result else '', end='')";
     let out = std::process::Command::new("uv")
         .args(["run", "--no-project", "--with-requirements"])
-        .arg(python_requirements("trafilatura"))
+        .arg(python_requirements(policy, "trafilatura"))
         .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
@@ -986,7 +1078,7 @@ fn run_html2text_py(
     let script = r"from html2text import HTML2Text; import json, sys; cfg = json.loads(sys.argv[2]); h = HTML2Text(); h.ignore_links = cfg['ignore_links']; h.ignore_images = cfg['ignore_images']; h.ignore_emphasis = cfg['ignore_emphasis']; h.body_width = cfg['body_width']; h.unicode_snob = cfg['unicode_snob']; h.escape_snob = cfg['escape_snob']; h.inline_links = cfg['inline_links']; h.google_doc = cfg['google_doc']; h.dash_unordered_list = cfg['dash_unordered_list']; html = open(sys.argv[1]).read(); print(h.handle(html), end='')";
     let out = std::process::Command::new("uv")
         .args(["run", "--no-project", "--with-requirements"])
-        .arg(python_requirements("html2text"))
+        .arg(python_requirements(policy, "html2text"))
         .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
@@ -1105,7 +1197,7 @@ fn run_markdownify(
     let script = r"from markdownify import markdownify as md; import json, sys; cfg = json.loads(sys.argv[2]); kwargs = {'autolinks': cfg['autolinks'], 'default_title': cfg['default_title'], 'heading_style': cfg['heading_style'], 'bullets': cfg['bullets'], 'strong_em_symbol': cfg['strong_em_symbol'], 'sub_symbol': cfg['sub_symbol'], 'sup_symbol': cfg['sup_symbol'], 'newline_style': cfg['newline_style'], 'code_language': cfg['code_language'], 'escape_asterisks': cfg['escape_asterisks'], 'escape_underscores': cfg['escape_underscores'], 'escape_misc': cfg['escape_misc'], 'keep_inline_images_in': cfg['keep_inline_images_in'], 'table_infer_header': cfg['table_infer_header'], 'wrap': cfg['wrap'], 'wrap_width': cfg['wrap_width']}; html = open(sys.argv[1]).read(); strip = cfg['strip']; convert = cfg['convert']; strip_document = cfg['strip_document']; strip_pre = cfg['strip_pre']; bs4_options = cfg['bs4_options']; kwargs['strip'] = strip if strip else None; kwargs['convert'] = convert if convert else None; kwargs['strip_document'] = strip_document; kwargs['strip_pre'] = strip_pre; kwargs['bs4_options'] = bs4_options; kwargs = {key: value for key, value in kwargs.items() if value is not None}; print(md(html, **kwargs), end='')";
     let out = std::process::Command::new("uv")
         .args(["run", "--no-project", "--with-requirements"])
-        .arg(python_requirements("markdownify"))
+        .arg(python_requirements(policy, "markdownify"))
         .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
@@ -1252,7 +1344,7 @@ fn run_e2m(
             "3.12",
             "--with-requirements",
         ])
-        .arg(python_requirements("e2m"))
+        .arg(python_requirements(policy, "e2m"))
         .args(["--", "python3", "-c", script])
         .arg(&work_dir)
         .arg(&tmp)
@@ -2189,7 +2281,11 @@ mod tests {
     fn resiliparse_excludes_navigation_without_another_acquisition(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let html = include_str!("../fixtures/article-with-navigation.html");
-        let output = run_resiliparse(&ExecutionPolicy::default(), html)?;
+        let output = run_resiliparse(
+            &ExecutionPolicy::default(),
+            html,
+            &crate::extractor_config::ResiliparseConfig::default(),
+        )?;
         for marker in [
             "CONTENT_SENTINEL_ALPHA",
             "CONTENT_SENTINEL_BETA",
@@ -2214,7 +2310,11 @@ mod tests {
     fn resiliparse_retains_technical_documentation_values() -> Result<(), Box<dyn std::error::Error>>
     {
         let html = include_str!("../fixtures/technical-reference.html");
-        let output = run_resiliparse(&ExecutionPolicy::default(), html)?;
+        let output = run_resiliparse(
+            &ExecutionPolicy::default(),
+            html,
+            &crate::extractor_config::ResiliparseConfig::default(),
+        )?;
         for value in [
             "CONTENT_SENTINEL_REGISTER_TEXT",
             "CTRL_A",
@@ -2236,7 +2336,11 @@ mod tests {
         let html = format!(
             "<html><head><title>Fixture</title></head><body><article><h1>Article title</h1><p>{body}</p></article><nav>Discard me</nav></body></html>"
         );
-        let result = run_mozilla_readability(&ExecutionPolicy::default(), &html)?;
+        let result = run_mozilla_readability(
+            &ExecutionPolicy::default(),
+            &html,
+            &crate::extractor_config::MozillaReadabilityConfig::default(),
+        )?;
         assert!(result.contains("Readability operates on one HTML snapshot"));
         assert!(!result.contains("Discard me"));
         Ok(())

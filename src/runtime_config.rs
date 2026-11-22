@@ -17,6 +17,7 @@ pub struct ExecutionPolicy {
     pub max_output_bytes: usize,
     pub browser_timeout_ms: u64,
     pub node_modules: PathBuf,
+    pub extractor_assets: PathBuf,
     pub webclaw_bin: PathBuf,
     pub html_to_markdown_go_bin: PathBuf,
 }
@@ -27,6 +28,7 @@ impl Default for ExecutionPolicy {
             max_html_bytes: DEFAULT_BYTE_LIMIT,
             max_output_bytes: DEFAULT_BYTE_LIMIT,
             browser_timeout_ms: 120_000,
+            extractor_assets: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/extractors"),
             node_modules: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tools/extractors/node_modules"),
             webclaw_bin: "webclaw".into(),
@@ -50,6 +52,7 @@ impl ExecutionPolicy {
         }
         for (field, path) in [
             ("node_modules", &self.node_modules),
+            ("extractor_assets", &self.extractor_assets),
             ("webclaw_bin", &self.webclaw_bin),
             ("html_to_markdown_go_bin", &self.html_to_markdown_go_bin),
         ] {
@@ -85,11 +88,36 @@ impl Default for ServerConfig {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TunerConfig {
+    pub listen: SocketAddr,
+    pub corpus_dir: PathBuf,
+    pub state_dir: PathBuf,
+    pub max_concurrent_previews: usize,
+}
+
+impl TunerConfig {
+    fn validate(&self) -> Result<(), String> {
+        if !self.listen.ip().is_loopback() {
+            return Err("tuner listen address must be loopback".into());
+        }
+        if self.corpus_dir.as_os_str().is_empty() || self.state_dir.as_os_str().is_empty() {
+            return Err("tuner corpus_dir and state_dir must not be empty".into());
+        }
+        if !(1..=64).contains(&self.max_concurrent_previews) {
+            return Err("tuner max_concurrent_previews must be 1..=64".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub execution: ExecutionPolicy,
     pub server: ServerConfig,
+    pub tuner: Option<TunerConfig>,
 }
 
 impl RuntimeConfig {
@@ -105,6 +133,9 @@ impl RuntimeConfig {
 
     fn validate(&self) -> Result<(), String> {
         self.execution.validate()?;
+        if let Some(tuner) = &self.tuner {
+            tuner.validate()?;
+        }
         if self.server.data_dir.as_os_str().is_empty() {
             return Err("data_dir must not be empty".to_owned());
         }
@@ -139,12 +170,29 @@ mod tests {
     }
 
     #[test]
+    fn tuner_configuration_is_explicit_and_loopback_only() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut config: RuntimeConfig = serde_json::from_str(
+            r#"{"execution":{"extractor_assets":"/assets"},"tuner":{"listen":"127.0.0.1:18580","corpus_dir":"/corpus","state_dir":"/state","max_concurrent_previews":3}}"#,
+        )?;
+        config.validate()?;
+        assert_eq!(config.execution.extractor_assets, PathBuf::from("/assets"));
+        let tuner = config.tuner.as_mut().ok_or("missing tuner configuration")?;
+        assert_eq!(tuner.max_concurrent_previews, 3);
+        tuner.listen = "0.0.0.0:18580".parse()?;
+        assert!(config.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
     fn malformed_and_out_of_range_configuration_is_rejected() {
         for input in [
             r#"{"execution":{"max_html_bytes":0}}"#,
             r#"{"execution":{"max_output_bytes":1073741825}}"#,
             r#"{"execution":{"browser_timeout_ms":999}}"#,
             r#"{"execution":{"webclaw_bin":""}}"#,
+            r#"{"execution":{"extractor_assets":""}}"#,
+            r#"{"tuner":{"listen":"127.0.0.1:18580","corpus_dir":"/corpus","state_dir":"/state","max_concurrent_previews":0}}"#,
             r#"{"server":{"max_concurrent_runs":65}}"#,
             r#"{"server":{"max_saved_runs":0}}"#,
             r#"{"server":{"data_dir":""}}"#,

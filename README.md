@@ -72,7 +72,7 @@ cargo run --release -- --config runtime.json --extractor nanohtml2text example.h
 
 The explicit execution policy is serialized with each isolated worker request,
 so acquisition, native conversion, subprocess capture, previews and comparisons
-all apply the same limits. Optional `execution.node_modules`,
+all apply the same limits. Optional `execution.extractor_assets`, `execution.node_modules`,
 `execution.webclaw_bin` and `execution.html_to_markdown_go_bin` select external
 tool paths; the default npm path is `tools/extractors/node_modules` in the source
 checkout, while the binaries default to `webclaw` and `html2markdown` via PATH.
@@ -132,3 +132,12 @@ to skip, Z to undo, or the matching touch buttons. SQLite keeps the full vote
 history and the Rankings view derives provisional Elo ratings. Acer serves the
 site through Certifex at https://extract-vote.onhir.eu (Tailscale only).
 The dataset, extraction outputs and votes stay on Acer, not in this Git repo.
+
+## Live extraction settings lab
+
+Use the fixed 20-page Hacker News corpus for interactive settings optimization
+with one engine and two independent pages. The tuner's standalone Axum mode,
+typed settings controls and deployment are documented in
+[docs/hn-settings-tuner.md](docs/hn-settings-tuner.md). The private dataset,
+baseline outputs and saved profiles remain on Acer; no network reacquisition
+occurs during live tuning.
