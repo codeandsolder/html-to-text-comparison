@@ -2315,13 +2315,13 @@ mod tests {
         let assets = tempfile::tempdir()?;
         std::fs::write(
             assets.path().join("snapshot-parsers.mjs"),
-            r#"import { readFileSync } from 'node:fs';
+            r"import { readFileSync } from 'node:fs';
 const [kind, input, config, url] = process.argv.slice(2);
 if (process.env.NODE_PATH !== undefined) throw new Error('ambient NODE_PATH');
 if (readFileSync(input, 'utf8') !== '<p>snapshot</p>') throw new Error('wrong snapshot');
 JSON.parse(config);
 process.stdout.write(kind + ':' + (url ?? 'no-url'));
-"#,
+",
         )?;
         let policy = ExecutionPolicy {
             extractor_assets: assets.path().to_owned(),
@@ -2333,7 +2333,11 @@ process.stdout.write(kind + ':' + (url ?? 'no-url'));
             "turndown:no-url",
         );
         assert_eq!(
-            run_mozilla_readability(&policy, html, &Default::default())?,
+            run_mozilla_readability(
+                &policy,
+                html,
+                &crate::extractor_config::MozillaReadabilityConfig::default()
+            )?,
             "mozilla-readability:no-url",
         );
         let url = url::Url::parse("https://example.com/")?;
