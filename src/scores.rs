@@ -944,7 +944,7 @@ fn run_node_snapshot_parser(
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
     let script = policy.extractor_assets.join("snapshot-parsers.mjs");
-    let mut command = std::process::Command::new("node");
+    let mut command = std::process::Command::new(&policy.snapshot_js_bin);
     command
         .env_remove("NODE_PATH")
         .arg(script)
@@ -2395,6 +2395,19 @@ print('isolated')
             matches!(result, Err(ref error) if error.contains("missing provisioned Python runtime")),
             "{result:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_runtime_selection_does_not_fall_back() -> Result<(), Box<dyn std::error::Error>> {
+        let assets = tempfile::tempdir()?;
+        let policy = ExecutionPolicy {
+            snapshot_js_bin: assets.path().join("not-an-installed-runtime"),
+            ..Default::default()
+        };
+        let error = run_turndown(&policy, "<p>snapshot</p>", &TurndownConfig::default(), &[])
+            .expect_err("an unavailable selected runtime must fail, not fall back to Node");
+        assert!(!error.is_empty());
         Ok(())
     }
 

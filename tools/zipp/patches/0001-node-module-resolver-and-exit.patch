@@ -1,0 +1,211 @@
+From 555de6cedf7c6fd016f7647d96171e83aa57a92e Mon Sep 17 00:00:00 2001
+From: codeandsolder <codeandsolder@gmail.com>
+Date: Sun, 22 Nov 2026 19:29:53 +0100
+Subject: [PATCH] Bind Node import.meta.resolve and finalize file modules at
+ program exit
+
+---
+ crates/zipp-vm/src/lang/js/node/runtime.rs | 17 +++++++++++++++++
+ crates/zipp-vm/src/lang/ts/mod.rs          |  2 +-
+ crates/zipp-vm/src/lib.rs                  |  2 +-
+ crates/zipp-vm/src/vm/dispatch_cold.rs     |  5 +++++
+ crates/zipp-vm/src/vm/engine/modules.rs    | 21 +++++++++++++++++++++
+ crates/zipp-vm/src/vm/engine/run.rs        | 19 +++++++++++++++++--
+ crates/zipp-vm/src/vm/native.rs            |  2 ++
+ crates/zipp-vm/src/vm/natives.rs           |  2 +-
+ 8 files changed, 65 insertions(+), 5 deletions(-)
+
+diff --git a/crates/zipp-vm/src/lang/js/node/runtime.rs b/crates/zipp-vm/src/lang/js/node/runtime.rs
+index 3b88705..3dc5180 100644
+--- a/crates/zipp-vm/src/lang/js/node/runtime.rs
++++ b/crates/zipp-vm/src/lang/js/node/runtime.rs
+@@ -526,6 +526,23 @@ impl<'p> Vm<'p> {
+                     self.node_bytes(bytes)?
+                 }
+             }
++            NODE_IMPORT_META_RESOLVE => {
++                // Use the identical resolution path (including import export
++                // conditions and symlink canonicalization) as ESM loading.
++                let dir = self.to_js_string(arg(0))?;
++                let spec = self.to_js_string(arg(1))?;
++                let raw = super::resolve::specifier_path(Some(std::path::Path::new(&dir)), &spec);
++                let path = self.resolve_module_path(&raw)?;
++                let url = if path.to_str().is_some_and(|s| s.starts_with("node:")) {
++                    path.to_string_lossy().into_owned()
++                } else {
++                    #[cfg(not(feature = "wasm-no-fs-loader"))]
++                    { crate::vm::file_url(&path) }
++                    #[cfg(feature = "wasm-no-fs-loader")]
++                    { return Err(Thrown("module file URLs unavailable".into())); }
++                };
++                self.alloc_str(url)
++            }
+             NODE_HOST_RESOLVE => {
+                 // `require(spec)` from folder `dir`: the file, or null.
+                 let spec = self.to_js_string(arg(0))?;
+diff --git a/crates/zipp-vm/src/lang/ts/mod.rs b/crates/zipp-vm/src/lang/ts/mod.rs
+index 31d9eca..ce536c7 100644
+--- a/crates/zipp-vm/src/lang/ts/mod.rs
++++ b/crates/zipp-vm/src/lang/ts/mod.rs
+@@ -532,7 +532,7 @@ fn run_module(path: &Path) -> Result<crate::Outcome, String> {
+     let host = crate::compile::compile_main_program(&crate::front::parse_auto("")?, "")?;
+     let mut vm = crate::vm::Vm::new(&host);
+     vm.set_module_base_dir(path.parent().map(|p| p.to_path_buf()));
+-    let result = vm.run().and_then(|_| vm.run_module_entry(path));
++    let result = vm.run_module_host().and_then(|_| vm.run_module_entry(path));
+     if !matches!(&result, Err(thrown) if thrown.0.contains("top-level await is not supported")) {
+         vm.report_unhandled_errors();
+     }
+diff --git a/crates/zipp-vm/src/lib.rs b/crates/zipp-vm/src/lib.rs
+index 8cd3eef..43185cb 100644
+--- a/crates/zipp-vm/src/lib.rs
++++ b/crates/zipp-vm/src/lib.rs
+@@ -1162,7 +1162,7 @@ pub fn run_module_file(
+     let host = compile::compile_main_program(&host_ast, &host_src)?;
+     let mut vm = vm::Vm::new(&host);
+     vm.set_module_base_dir(base_dir);
+-    if let Err(thrown) = vm.run() {
++    if let Err(thrown) = vm.run_module_host() {
+         vm.report_unhandled_errors();
+         return Ok(Outcome {
+             output: std::mem::take(&mut vm.output),
+diff --git a/crates/zipp-vm/src/vm/dispatch_cold.rs b/crates/zipp-vm/src/vm/dispatch_cold.rs
+index 4cdc40f..026515e 100644
+--- a/crates/zipp-vm/src/vm/dispatch_cold.rs
++++ b/crates/zipp-vm/src/vm/dispatch_cold.rs
+@@ -1980,11 +1980,16 @@ impl<'p> Vm<'p> {
+                                 // module file's (HostGetImportMetaProperties,
+                                 // as Node, Deno and browsers give it). No
+                                 // collection runs between the two allocations.
++                                let _gc = self.gc_lock_guard();
+                                 let mut meta = ObjMap::new();
+                                 if let Some(url) = self.module_url(k) {
+                                     let url = self.alloc_str(url);
+                                     meta.set("url", url);
+                                 }
++                                #[cfg(feature = "node")]
++                                if let Some(resolve) = self.node_module_resolver(k) {
++                                    meta.set("resolve", resolve);
++                                }
+                                 let m = self.heap.alloc(HeapObj::Object(Box::new(meta)));
+                                 self.proto_of.insert(m, Value::NULL);
+                                 self.module_metas.insert(k, m);
+diff --git a/crates/zipp-vm/src/vm/engine/modules.rs b/crates/zipp-vm/src/vm/engine/modules.rs
+index 1d46ee3..d7084a7 100644
+--- a/crates/zipp-vm/src/vm/engine/modules.rs
++++ b/crates/zipp-vm/src/vm/engine/modules.rs
+@@ -465,6 +465,27 @@ impl<'p> Vm<'p> {
+         self.module_base_dir.clone()
+     }
+ 
++    /// Node's resolver is bound to the importing module, not the caller of
++    /// the function. Never grant it to a confined module loader.
++    #[cfg(all(feature = "node", not(feature = "wasm-no-fs-loader")))]
++    pub(crate) fn node_module_resolver(&mut self, ns: u32) -> Option<Value> {
++        if !self.node_installed || self.module_root.is_some() {
++            return None;
++        }
++        let ns = Value::heap(ns);
++        let dir = self.module_cache.iter()
++            .find(|(_, value)| **value == ns)?
++            .0.parent()?.to_string_lossy().into_owned();
++        let _gc = self.gc_lock_guard();
++        let dir = self.alloc_str(dir);
++        let target = Value::heap(self.heap.alloc(HeapObj::Native(native::NODE_IMPORT_META_RESOLVE)));
++        Some(Value::heap(self.heap.alloc(HeapObj::Bound {
++            target,
++            this: Value::UNDEFINED,
++            args: vec![dir],
++        })))
++    }
++
+     /// `import.meta.url` of the module whose namespace is `ns`: the `file:`
+     /// URL of the path the loader cached it under. `None` for code no file
+     /// was loaded for. Under a confined loader the URL is the path below the
+diff --git a/crates/zipp-vm/src/vm/engine/run.rs b/crates/zipp-vm/src/vm/engine/run.rs
+index 503e234..4ea7e62 100644
+--- a/crates/zipp-vm/src/vm/engine/run.rs
++++ b/crates/zipp-vm/src/vm/engine/run.rs
+@@ -195,6 +195,15 @@ impl<'p> Vm<'p> {
+     /// script, and the test's own GDI runs last, so a same-named declaration in
+     /// the test wins.
+     pub fn run_with_prelude(&mut self, prelude: Option<&str>) -> Result<Value, Thrown> {
++        self.run_script_body(prelude, false)
++    }
++
++    /// The realm bootstrap for a file module is not a completed Node program.
++    pub(crate) fn run_module_host(&mut self) -> Result<Value, Thrown> {
++        self.run_script_body(None, true)
++    }
++
++    fn run_script_body(&mut self, prelude: Option<&str>, module_host: bool) -> Result<Value, Thrown> {
+         // Inject the built-in global objects (Object/Array/Function + their
+         // prototypes) into their reserved slots BEFORE hoisting, so a user
+         // declaration of the same name shadows the builtin.
+@@ -204,7 +213,7 @@ impl<'p> Vm<'p> {
+         // harness run never has them).
+         #[cfg(feature = "node")]
+         if !has_prelude {
+-            self.install_node_runtime(true)?;
++            self.install_node_runtime(!module_host)?;
+         }
+         if has_prelude {
+             // Pin only the intrinsic boot graph before running a separate
+@@ -286,7 +295,11 @@ impl<'p> Vm<'p> {
+         let root = main.as_ref().copied().unwrap_or(Value::UNDEFINED);
+         self.with_host_roots(&[root], Self::run_event_loop);
+         #[cfg(feature = "node")]
+-        self.with_host_roots(&[root], Self::node_run_ended);
++        if !module_host {
++            self.with_host_roots(&[root], Self::node_run_ended);
++        }
++        #[cfg(not(feature = "node"))]
++        let _ = module_host;
+         if main.is_ok() {
+             if let Some(t) = self.take_uncaught_timer_throw() {
+                 return Err(t);
+@@ -356,6 +369,8 @@ impl<'p> Vm<'p> {
+             self.mark_promise_handled(bp);
+         }
+         self.run_event_loop();
++        #[cfg(feature = "node")]
++        self.with_host_roots(body.as_slice(), Self::node_run_ended);
+         if let Some(bp) = body {
+             if bp.is_heap() {
+                 let st = match self.heap.get(bp.heap_index()) {
+diff --git a/crates/zipp-vm/src/vm/native.rs b/crates/zipp-vm/src/vm/native.rs
+index 055bba3..ecd8ef3 100644
+--- a/crates/zipp-vm/src/vm/native.rs
++++ b/crates/zipp-vm/src/vm/native.rs
+@@ -180,6 +180,7 @@ pub const NODE_HOST_CJS: u16 = 2117;
+ pub const NODE_HOST_INSPECT: u16 = 2118;
+ pub const NODE_HOST_READ_STDIN: u16 = 2119;
+ pub const NODE_HOST_TIMER: u16 = 2120;
++pub const NODE_IMPORT_META_RESOLVE: u16 = 2124;
+ /// `WebAssembly`'s runtime (vm/webassembly): the layer's one native,
+ /// `op(name, ...args)`.
+ #[cfg(feature = "webassembly")]
+@@ -1859,6 +1860,7 @@ pub fn static_name_length(id: u16) -> Option<(&'static str, u8)> {
+         NODE_HOST_INSPECT => ("inspect", 1),
+         NODE_HOST_READ_STDIN => ("readStdin", 2),
+         NODE_HOST_TIMER => ("timer", 2),
++        NODE_IMPORT_META_RESOLVE => ("resolve", 2),
+         #[cfg(feature = "webassembly")]
+         WASM_HOST_OP => ("op", 1),
+         FR_REGISTER => ("register", 2),
+diff --git a/crates/zipp-vm/src/vm/natives.rs b/crates/zipp-vm/src/vm/natives.rs
+index 2193fc3..db8fce2 100644
+--- a/crates/zipp-vm/src/vm/natives.rs
++++ b/crates/zipp-vm/src/vm/natives.rs
+@@ -4975,7 +4975,7 @@ impl<'p> Vm<'p> {
+             TE_ENCODE | TE_ENCODE_INTO | TE_ENCODING_GET | TD_DECODE | TD_ENCODING_GET
+             | TD_FATAL_GET | TD_IGNORE_BOM_GET => self.text_codec_native(id, this, args)?,
+             #[cfg(feature = "node")]
+-            NODE_HOST_WRITE..=NODE_HOST_TIMER => self.node_host_native(id, args)?,
++            NODE_HOST_WRITE..=NODE_HOST_TIMER | NODE_IMPORT_META_RESOLVE => self.node_host_native(id, args)?,
+             #[cfg(feature = "php")]
+             PHP_OUTPUT..=PHP_SQL => self.php_native_call(id, args)?,
+             #[cfg(feature = "rust")]
+-- 
+2.56.1
+

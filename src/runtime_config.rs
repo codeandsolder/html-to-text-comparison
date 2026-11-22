@@ -17,6 +17,8 @@ pub struct ExecutionPolicy {
     pub max_output_bytes: usize,
     pub browser_timeout_ms: u64,
     pub extractor_assets: PathBuf,
+    /// Executable for pure snapshot JavaScript adapters; browser acquisition uses Node.
+    pub snapshot_js_bin: PathBuf,
     pub webclaw_bin: PathBuf,
     pub html_to_markdown_go_bin: PathBuf,
 }
@@ -28,6 +30,7 @@ impl Default for ExecutionPolicy {
             max_output_bytes: DEFAULT_BYTE_LIMIT,
             browser_timeout_ms: 120_000,
             extractor_assets: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/extractors"),
+            snapshot_js_bin: "node".into(),
             webclaw_bin: "webclaw".into(),
             html_to_markdown_go_bin: "html2markdown".into(),
         }
@@ -49,6 +52,7 @@ impl ExecutionPolicy {
         }
         for (field, path) in [
             ("extractor_assets", &self.extractor_assets),
+            ("snapshot_js_bin", &self.snapshot_js_bin),
             ("webclaw_bin", &self.webclaw_bin),
             ("html_to_markdown_go_bin", &self.html_to_markdown_go_bin),
         ] {

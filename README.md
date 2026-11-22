@@ -72,7 +72,13 @@ cargo run --release -- --config runtime.json --extractor nanohtml2text example.h
 
 The explicit execution policy is serialized with each isolated worker request,
 so acquisition, native conversion, subprocess capture, previews and comparisons
-all apply the same limits. Optional `execution.extractor_assets`, `execution.webclaw_bin` and
+all apply the same limits. The five pure snapshot JavaScript adapters may use an explicitly selected
+`execution.snapshot_js_bin` (default `node`). See [the Zipp experiment](tools/zipp/README.md)
+for the temporary source patch and compatibility limits. Browser acquisition
+and Percollate retain Node; the Python adapters retain their pinned CPython/uv
+environments until the corresponding Zipp standard-library support exists.
+
+Optional `execution.extractor_assets`, `execution.webclaw_bin` and
 `execution.html_to_markdown_go_bin` select external tool paths. The asset root
 (default `tools/extractors` in the source checkout) contains the Node scripts,
 their adjacent `node_modules` installation, and pinned Python requirements; the
