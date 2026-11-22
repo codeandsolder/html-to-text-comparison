@@ -1,4 +1,5 @@
 use crate::extractor_config::ExtractorStates;
+use crate::runtime_config::ExecutionPolicy;
 use crate::scores::run_cli_extractor;
 use rand::seq::SliceRandom;
 use regex::Regex;
@@ -66,6 +67,7 @@ impl CandidateTier {
 }
 
 pub fn analyze_boilerplate_diff(
+    policy: &ExecutionPolicy,
     target_url: &str,
     target_html: &str,
     states: &ExtractorStates,
@@ -73,7 +75,7 @@ pub fn analyze_boilerplate_diff(
 ) -> Result<BoilerplateDiffAnalysis, String> {
     let parsed_target_url = Url::parse(target_url).map_err(|error| error.to_string())?;
     let requested_links = requested_links.clamp(1, MAX_SAMPLE_COUNT);
-    let target_markdown = markdownify_html(target_html, states, &parsed_target_url)?;
+    let target_markdown = markdownify_html(policy, target_html, states, &parsed_target_url)?;
     let target_lines = split_markdown_lines(&target_markdown);
     let normalized_target_lines = target_lines
         .iter()
@@ -106,13 +108,14 @@ pub fn analyze_boilerplate_diff(
             break;
         }
 
-        let (markdown_line_count, normalized_sample_lines) = match read_sample(&candidate, states) {
-            Ok(data) => data,
-            Err(error) => {
-                warnings.push(format!("Skipped {}: {error}", candidate.url));
-                continue;
-            }
-        };
+        let (markdown_line_count, normalized_sample_lines) =
+            match read_sample(policy, &candidate, states) {
+                Ok(data) => data,
+                Err(error) => {
+                    warnings.push(format!("Skipped {}: {error}", candidate.url));
+                    continue;
+                }
+            };
         let matched_target_lines = accumulate_equal_lines(
             &normalized_target_lines,
             &normalized_sample_lines,
@@ -179,11 +182,12 @@ pub fn analyze_boilerplate_diff(
 }
 
 fn read_sample(
+    policy: &ExecutionPolicy,
     candidate: &CandidateLink,
     states: &ExtractorStates,
 ) -> Result<(usize, Vec<String>), String> {
-    let html = crate::acquisition::Acquisition::Http.acquire(&candidate.url)?;
-    let markdown = markdownify_html(&html, states, &candidate.url)?;
+    let html = crate::acquisition::Acquisition::Http.acquire(&candidate.url, policy)?;
+    let markdown = markdownify_html(policy, &html, states, &candidate.url)?;
     let lines = split_markdown_lines(&markdown);
     let normalized = lines
         .iter()
@@ -295,11 +299,12 @@ fn parent_path_prefix(url: &Url) -> String {
 }
 
 fn markdownify_html(
+    policy: &ExecutionPolicy,
     html: &str,
     states: &ExtractorStates,
     parsed_url: &Url,
 ) -> Result<String, String> {
-    let markdown = run_cli_extractor("markdownify", html, states, parsed_url)?;
+    let markdown = run_cli_extractor(policy, "markdownify", html, states, parsed_url)?;
     if markdown.trim().is_empty() {
         return Err("markdownify returned empty output".to_string());
     }

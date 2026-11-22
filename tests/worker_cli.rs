@@ -148,8 +148,11 @@ fn http_acquisition_rejects_oversized_response_before_extraction(
         )?;
         Ok(())
     });
+    let config = workspace.path().join("config.json");
+    fs::write(&config, r#"{"execution":{"max_html_bytes":64}}"#)?;
     let output = Command::new(env!("CARGO_BIN_EXE_html-to-text-comparison"))
-        .env("HTML_TO_TEXT_MAX_HTML_BYTES", "64")
+        .arg("--config")
+        .arg(&config)
         .args(["--acquire", "http", "--extractor", "nanohtml2text", &url])
         .current_dir(workspace.path())
         .output()?;
@@ -217,11 +220,14 @@ fn oversized_native_and_external_outputs_are_explicit_failures(
             "testing output boundaries ".repeat(200)
         ),
     )?;
+    let config = workspace.path().join("config.json");
+    fs::write(&config, r#"{"execution":{"max_output_bytes":128}}"#)?;
     for extractor in ["nanohtml2text", "node-html-markdown"] {
         let output = Command::new(env!("CARGO_BIN_EXE_html-to-text-comparison"))
+            .arg("--config")
+            .arg(&config)
             .args(["--extractor", extractor])
             .arg(&source)
-            .env("HTML_TO_TEXT_MAX_OUTPUT_BYTES", "128")
             .current_dir(workspace.path())
             .output()?;
         assert!(
@@ -299,5 +305,46 @@ fn offline_snapshot_accepts_original_url_and_rejects_invalid_scheme(
     assert!(!url_input.status.success());
     assert!(String::from_utf8_lossy(&url_input.stderr)
         .contains("only applies to a local HTML snapshot"));
+    Ok(())
+}
+
+#[test]
+fn invalid_startup_configuration_fails_before_acquisition() -> Result<(), Box<dyn std::error::Error>>
+{
+    let root = tempfile::tempdir()?;
+    let config = root.path().join("config.json");
+    let input = root.path().join("input.html");
+    fs::write(&input, "<p>not acquired</p>")?;
+    fs::write(&config, r#"{"execution":{"max_html_bytes":0}}"#)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_html-to-text-comparison"))
+        .arg("--config")
+        .arg(&config)
+        .args(["--extractor", "nanohtml2text"])
+        .arg(&input)
+        .current_dir(root.path())
+        .output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("max_html_bytes"));
+    assert!(!root.path().join("out").exists());
+    Ok(())
+}
+
+#[test]
+fn local_snapshot_honors_explicit_byte_limit() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let config = root.path().join("config.json");
+    let input = root.path().join("input.html");
+    fs::write(&input, "x".repeat(65))?;
+    fs::write(&config, r#"{"execution":{"max_html_bytes":64}}"#)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_html-to-text-comparison"))
+        .arg("--config")
+        .arg(&config)
+        .args(["--extractor", "nanohtml2text"])
+        .arg(&input)
+        .current_dir(root.path())
+        .output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("exceeds 64 byte limit"));
+    assert!(!root.path().join("out").exists());
     Ok(())
 }

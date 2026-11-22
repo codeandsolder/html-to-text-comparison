@@ -3,19 +3,23 @@ use std::io::Read;
 use std::time::Duration;
 use url::Url;
 
-/// Bound acquisition memory independently of extractor timeouts; HTML is
-/// copied once per isolated worker and compared across every enabled engine.
-pub fn max_html_bytes() -> Result<usize, String> {
-    const DEFAULT: usize = 64 * 1024 * 1024;
-    const MAXIMUM: usize = 1024 * 1024 * 1024;
-    let limit = std::env::var("HTML_TO_TEXT_MAX_HTML_BYTES").map_or(Ok(DEFAULT), |raw| {
-        raw.parse::<usize>()
-            .map_err(|error| format!("invalid HTML_TO_TEXT_MAX_HTML_BYTES: {error}"))
-    })?;
-    if !(1..=MAXIMUM).contains(&limit) {
-        return Err(format!("HTML_TO_TEXT_MAX_HTML_BYTES must be 1..={MAXIMUM}"));
+use crate::runtime_config::ExecutionPolicy;
+
+/// Read a UTF-8 snapshot with a hard byte bound, including files that grow after open.
+pub fn read_html_file(path: &std::path::Path, max_bytes: usize) -> Result<String, String> {
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    if file.metadata().map_err(|error| error.to_string())?.len() > limit {
+        return Err(format!("input HTML exceeds {max_bytes} byte limit"));
     }
-    Ok(limit)
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > max_bytes {
+        return Err(format!("input HTML exceeds {max_bytes} byte limit"));
+    }
+    String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 
 /// Exactly one root-document acquisition per run. An extractor receives
@@ -32,7 +36,7 @@ pub enum Acquisition {
 }
 
 impl Acquisition {
-    pub fn acquire(self, url: &Url) -> Result<String, String> {
+    pub fn acquire(self, url: &Url, policy: &ExecutionPolicy) -> Result<String, String> {
         if !matches!(url.scheme(), "http" | "https") {
             return Err("site acquisition only supports http(s) URLs".to_string());
         }
@@ -41,7 +45,7 @@ impl Acquisition {
                 Err("snapshot acquisition modes do not perform network requests".to_string())
             }
             Self::Http => {
-                let max_bytes = max_html_bytes()?;
+                let max_bytes = policy.max_html_bytes;
                 let config = ureq::Agent::config_builder()
                     .timeout_global(Some(Duration::from_secs(45)))
                     .build();
@@ -75,8 +79,8 @@ impl Acquisition {
                 command.arg(script).arg(url.as_str());
                 let output = crate::worker::run_captured_command(
                     command,
-                    acquisition_timeout()?,
-                    max_html_bytes()?,
+                    policy.browser_timeout(),
+                    policy.max_html_bytes,
                 )
                 .map_err(|error| format!("CloakBrowser acquisition failed: {error}"))?;
                 if !output.status.success() {
@@ -103,8 +107,8 @@ impl Acquisition {
                     .arg(url.as_str());
                 let output = crate::worker::run_captured_command(
                     command,
-                    acquisition_timeout()?,
-                    max_html_bytes()?,
+                    policy.browser_timeout(),
+                    policy.max_html_bytes,
                 )
                 .map_err(|error| format!("Lightpanda acquisition failed: {error}"))?;
                 if !output.status.success() {
@@ -119,17 +123,4 @@ impl Acquisition {
             }
         }
     }
-}
-
-/// Browser navigation limits apply to the entire process group (including
-/// the Chromium descendants), and can be lengthened for cold first launches.
-fn acquisition_timeout() -> Result<std::time::Duration, String> {
-    let millis = std::env::var("HTML_TO_TEXT_ACQUIRE_TIMEOUT_MS")
-        .unwrap_or_else(|_| "120000".to_string())
-        .parse::<u64>()
-        .map_err(|error| format!("invalid acquisition deadline: {error}"))?;
-    if !(1000..=900_000).contains(&millis) {
-        return Err("acquisition deadline must be 1,000–900,000 ms".to_string());
-    }
-    Ok(std::time::Duration::from_millis(millis))
 }

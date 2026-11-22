@@ -3,6 +3,7 @@ use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 use std::{fs::write, path::PathBuf};
 
+use crate::runtime_config::ExecutionPolicy;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,28 +40,40 @@ pub struct Runner {
     out_dir: PathBuf,
     html: String,
     stats: Vec<Stats>,
+    policy: ExecutionPolicy,
     timeout_override: Option<Duration>,
 }
 
 impl Runner {
-    pub const fn new(out_dir: PathBuf, html: String) -> Self {
+    pub const fn new(out_dir: PathBuf, html: String, policy: ExecutionPolicy) -> Self {
         Self {
             out_dir,
             html,
             stats: Vec::new(),
+            policy,
             timeout_override: None,
         }
     }
 
     /// Explicit override used by controlled deadline integration tests.
     #[cfg(test)]
-    pub const fn with_timeout(out_dir: PathBuf, html: String, timeout: Duration) -> Self {
+    pub const fn with_timeout(
+        out_dir: PathBuf,
+        html: String,
+        policy: ExecutionPolicy,
+        timeout: Duration,
+    ) -> Self {
         Self {
             out_dir,
             html,
             stats: Vec::new(),
+            policy,
             timeout_override: Some(timeout),
         }
+    }
+
+    pub const fn policy(&self) -> &ExecutionPolicy {
+        &self.policy
     }
 
     // Runs only inside the isolated worker, or in a focused in-process unit test.
@@ -98,16 +111,13 @@ impl Runner {
                 (String::new(), ExtractionStatus::Panicked, error)
             }
         };
-        let (output, status, error) = if status.is_success() {
-            match crate::worker::max_output_bytes() {
-                Ok(limit) if output.len() > limit => (
-                    String::new(),
-                    ExtractionStatus::Failed,
-                    format!("extractor output exceeds {limit} byte limit"),
-                ),
-                Err(message) => (String::new(), ExtractionStatus::Failed, message),
-                _ => (output, status, error),
-            }
+        let limit = self.policy.max_output_bytes;
+        let (output, status, error) = if status.is_success() && output.len() > limit {
+            (
+                String::new(),
+                ExtractionStatus::Failed,
+                format!("extractor output exceeds {limit} byte limit"),
+            )
         } else {
             (output, status, error)
         };
@@ -159,11 +169,11 @@ impl Runner {
         });
         let outcome = crate::worker::execute_isolated(
             &self.out_dir,
-            &self.out_dir.join("source.html"),
             extractor_key,
             output_name,
             url,
             states,
+            &self.policy,
             timeout,
         );
         let stat = outcome.unwrap_or_else(|error| Stats {
@@ -250,6 +260,7 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::Runner;
+    use crate::runtime_config::ExecutionPolicy;
 
     #[test]
     fn typed_extractor_outcomes_preserve_legitimate_text() -> Result<(), Box<dyn std::error::Error>>
@@ -259,7 +270,11 @@ mod tests {
         let out_dir =
             std::env::temp_dir().join(format!("runner_outcomes_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&out_dir)?;
-        let mut runner = Runner::new(out_dir.clone(), "<p>Hello</p>".to_string());
+        let mut runner = Runner::new(
+            out_dir.clone(),
+            "<p>Hello</p>".to_string(),
+            ExecutionPolicy::default(),
+        );
 
         runner.run("success", |_| Ok("Converted".to_string()));
         runner.run("failed", |_| Err("tool missing".to_string()));
