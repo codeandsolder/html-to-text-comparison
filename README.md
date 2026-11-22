@@ -72,7 +72,7 @@ cargo run --release -- --config runtime.json --extractor nanohtml2text example.h
 
 The explicit execution policy is serialized with each isolated worker request,
 so acquisition, native conversion, subprocess capture, previews and comparisons
-all apply the same limits. Optional `execution.node_modules`,
+all apply the same limits. Optional `execution.extractor_assets`, `execution.node_modules`,
 `execution.webclaw_bin` and `execution.html_to_markdown_go_bin` select external
 tool paths; the default npm path is `tools/extractors/node_modules` in the source
 checkout, while the binaries default to `webclaw` and `html2markdown` via PATH.

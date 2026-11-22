@@ -170,12 +170,29 @@ mod tests {
     }
 
     #[test]
+    fn tuner_configuration_is_explicit_and_loopback_only() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut config: RuntimeConfig = serde_json::from_str(
+            r#"{"execution":{"extractor_assets":"/assets"},"tuner":{"listen":"127.0.0.1:18580","corpus_dir":"/corpus","state_dir":"/state","max_concurrent_previews":3}}"#,
+        )?;
+        config.validate()?;
+        assert_eq!(config.execution.extractor_assets, PathBuf::from("/assets"));
+        let tuner = config.tuner.as_mut().ok_or("missing tuner configuration")?;
+        assert_eq!(tuner.max_concurrent_previews, 3);
+        tuner.listen = "0.0.0.0:18580".parse()?;
+        assert!(config.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
     fn malformed_and_out_of_range_configuration_is_rejected() {
         for input in [
             r#"{"execution":{"max_html_bytes":0}}"#,
             r#"{"execution":{"max_output_bytes":1073741825}}"#,
             r#"{"execution":{"browser_timeout_ms":999}}"#,
             r#"{"execution":{"webclaw_bin":""}}"#,
+            r#"{"execution":{"extractor_assets":""}}"#,
+            r#"{"tuner":{"listen":"127.0.0.1:18580","corpus_dir":"/corpus","state_dir":"/state","max_concurrent_previews":0}}"#,
             r#"{"server":{"max_concurrent_runs":65}}"#,
             r#"{"server":{"max_saved_runs":0}}"#,
             r#"{"server":{"data_dir":""}}"#,

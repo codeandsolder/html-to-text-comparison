@@ -73,8 +73,7 @@ impl Acquisition {
                     .map_err(|error| format!("decoded HTML was not UTF-8: {error}"))
             }
             Self::Cloakbrowser => {
-                let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("tools/extractors/cloakbrowser-acquire.mjs");
+                let script = policy.extractor_assets.join("cloakbrowser-acquire.mjs");
                 let mut command = std::process::Command::new("node");
                 command.arg(script).arg(url.as_str());
                 let output = crate::worker::run_captured_command(

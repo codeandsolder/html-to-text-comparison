@@ -212,12 +212,11 @@ fn config_group(state: &ExtractorState, name: &str) -> Value {
 }
 
 fn validate_settings(
-    state: &TunerState,
+    engines: &HashMap<String, EngineInfo>,
     engine: &str,
     settings: &Value,
 ) -> ApiResult<ExtractorConfig> {
-    let info = state
-        .engines
+    let info = engines
         .get(engine)
         .ok_or_else(|| invalid("Engine not in the speed-qualified shortlist"))?;
     let expected = info
@@ -284,8 +283,13 @@ fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, Str
         {
             return Err("Unsafe or oversized corpus entry".into());
         }
-        let data = fs::read(root.join(&record.file)).map_err(|e| e.to_string())?;
-        if data.len() != record.bytes || format!("{:x}", Sha256::digest(&data)) != record.sha256 {
+        let data = crate::acquisition::read_html_file(
+            &root.join(&record.file),
+            MAX_STORY_BYTES.min(policy.max_html_bytes),
+        )?;
+        if data.len() != record.bytes
+            || format!("{:x}", Sha256::digest(data.as_bytes())) != record.sha256
+        {
             return Err(format!("Source SHA256 mismatch: {}", record.capture_id));
         }
         let parsed = url::Url::parse(&record.final_url).map_err(|e| e.to_string())?;
@@ -301,7 +305,7 @@ fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, Str
             url: record.final_url,
             rank: record.hn_rank,
             bytes: record.bytes,
-            html: String::from_utf8(data).map_err(|e| e.to_string())?.into(),
+            html: data.into(),
         });
     }
 
@@ -362,19 +366,7 @@ fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, Str
         if !engines.contains_key(&engine) {
             continue;
         }
-        let state = TunerState {
-            stories: Arc::new(Vec::new()),
-            indices: Arc::new(HashMap::new()),
-            engines: Arc::new(engines.clone()),
-            names: Arc::new(names.clone()),
-            baseline: Arc::new(HashMap::new()),
-            profiles: Arc::new(RwLock::new(HashMap::new())),
-            profile_path: Arc::new(profile_path.clone()),
-            cache: Arc::new(Mutex::new(ResultCache::default())),
-            permits: Arc::new(Semaphore::new(config.max_concurrent_previews)),
-            policy: Arc::clone(&policy),
-        };
-        validate_settings(&state, &engine, &settings)
+        validate_settings(&engines, &engine, &settings)
             .map_err(|(_, error)| format!("Invalid saved profile {engine}: {error}"))?;
         valid_profiles.insert(engine, settings);
     }
@@ -567,7 +559,7 @@ async fn extract(
     if req.pages[0] == req.pages[1] {
         return Err(invalid("Choose two different source pages"));
     }
-    let config = validate_settings(&state, &req.engine, &req.settings)?;
+    let config = validate_settings(&state.engines, &req.engine, &req.settings)?;
     let i = *state
         .indices
         .get(&req.pages[0])
@@ -632,7 +624,7 @@ async fn save(
     Json(req): Json<SaveRequest>,
 ) -> ApiResult<Json<Value>> {
     same_origin(&headers)?;
-    validate_settings(&state, &req.engine, &req.settings)?;
+    validate_settings(&state.engines, &req.engine, &req.settings)?;
     let mut profiles = state.profiles.write().await;
     let mut next = profiles.clone();
     next.insert(req.engine.clone(), req.settings.clone());
