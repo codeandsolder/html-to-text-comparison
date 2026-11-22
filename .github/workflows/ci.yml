@@ -29,7 +29,13 @@ jobs:
         # This public CI uses an ephemeral Ubuntu runner. Install the distro
         # package normally, without disabling namespace restrictions.
         sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends bubblewrap
+        sudo apt-get install -y --no-install-recommends bubblewrap apparmor-profiles apparmor-utils
+        # Enable Ubuntu's packaged, program-specific user-namespace profile;
+        # retain the global AppArmor restrictions for other applications.
+        if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+        fi
         bwrap --version
         bwrap --unshare-all --unshare-user --unshare-net --disable-userns --ro-bind /usr /usr --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 -- /usr/bin/true
         # Pin the complete PyPy distribution; uv installs packages into the
@@ -62,7 +68,13 @@ jobs:
         # This public CI uses an ephemeral Ubuntu runner. Install the distro
         # package normally, without disabling namespace restrictions.
         sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends bubblewrap
+        sudo apt-get install -y --no-install-recommends bubblewrap apparmor-profiles apparmor-utils
+        # Enable Ubuntu's packaged, program-specific user-namespace profile;
+        # retain the global AppArmor restrictions for other applications.
+        if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+        fi
         bwrap --version
         bwrap --unshare-all --unshare-user --unshare-net --disable-userns --ro-bind /usr /usr --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 -- /usr/bin/true
         uv python install 3.12.15 --no-bin
