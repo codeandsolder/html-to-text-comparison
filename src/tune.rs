@@ -288,7 +288,7 @@ fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, Str
             MAX_STORY_BYTES.min(policy.max_html_bytes),
         )?;
         if data.len() != record.bytes
-            || format!("{:x}", Sha256::digest(data.as_bytes())) != record.sha256
+            || hex::encode(Sha256::digest(data.as_bytes())) != record.sha256
         {
             return Err(format!("Source SHA256 mismatch: {}", record.capture_id));
         }

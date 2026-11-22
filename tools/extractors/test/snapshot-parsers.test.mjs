@@ -17,6 +17,17 @@ test('node-html-markdown converts the supplied full document', async () => {
     assert.match(text, /\*\*strong\*\*/);
 });
 
+test('node-html-markdown preserves defaults when only selected options change', async () => {
+    const text = await parseSnapshot('node-html-markdown', '<h1>Header</h1><p>A <strong>strong</strong> line</p>', 'https://example.com', {
+        strong_delimiter: '__',
+        use_inline_links: false,
+        max_consecutive_newlines: 0,
+    });
+    assert.match(text, /# Header/);
+    assert.match(text, /__strong__/);
+    assert.doesNotMatch(text, /undefined/);
+});
+
 test('webforai reads the same snapshot and preserves technical tables and code', async () => {
     const { readFile } = await import('node:fs/promises');
     const raw = await readFile(new URL('../../../fixtures/technical-reference.html', import.meta.url), 'utf8');

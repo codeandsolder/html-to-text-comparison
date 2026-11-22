@@ -16,7 +16,7 @@ async function parseSnapshot(kind, html, url, config = {}) {
         }
         case 'node-html-markdown': {
             const { NodeHtmlMarkdown } = await import('node-html-markdown');
-            return NodeHtmlMarkdown.translate(html, {
+            const options = {
                 codeFence: config.code_fence,
                 bulletMarker: config.bullet_marker,
                 indent: config.indent,
@@ -30,7 +30,10 @@ async function parseSnapshot(kind, html, url, config = {}) {
                 useInlineLinks: config.use_inline_links,
                 ignore: config.ignore?.length ? config.ignore : undefined,
                 blockElements: config.block_elements?.length ? config.block_elements : undefined,
-            });
+            };
+            return NodeHtmlMarkdown.translate(html, Object.fromEntries(
+                Object.entries(options).filter(([, value]) => value !== undefined)
+            ));
         }
         default:
             throw new Error(`Unknown snapshot parser: ${kind}`);

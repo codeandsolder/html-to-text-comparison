@@ -970,7 +970,7 @@ fn run_mozilla_readability(
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
     let cfg_json = serde_json::to_string(cfg).map_err(|error| error.to_string())?;
-    let script = r#"const fs = require('fs');
+    let script = r"const fs = require('fs');
 const {parseHTML} = require('linkedom');
 const {Readability} = require('@mozilla/readability');
 const html = fs.readFileSync(process.argv[1], 'utf8');
@@ -988,7 +988,7 @@ const opts = {
 const result = new Readability(document, opts).parse();
 if (!result) { console.error('No readable content'); process.exit(2); }
 process.stdout.write(result.textContent || '');
-"#;
+";
     let out = std::process::Command::new("node")
         .env("NODE_PATH", &policy.node_modules)
         .args(["-e", script])
@@ -1016,7 +1016,7 @@ fn run_resiliparse(
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
     let cfg_json = serde_json::to_string(cfg).map_err(|error| error.to_string())?;
-    let script = r#"import sys,json
+    let script = r"import sys,json
 from pathlib import Path
 from resiliparse.extract.html2text import extract_plain_text
 cfg=json.loads(sys.argv[2])
@@ -1024,7 +1024,7 @@ mode=cfg.pop('formatting_mode')
 cfg['preserve_formatting']={'formatted':True,'plain':False,'minimal_html':'minimal_html'}[mode]
 html=Path(sys.argv[1]).read_text(encoding='utf-8')
 print(extract_plain_text(html, **cfg), end='')
-"#;
+";
     let out = std::process::Command::new("uv")
         .args(["run", "--no-project", "--with-requirements"])
         .arg(python_requirements(policy, "resiliparse"))
