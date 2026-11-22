@@ -26,8 +26,16 @@ jobs:
         export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
         PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts --no-audit --no-fund
         npm test --prefix tools/extractors
-        uv run --no-project --with-requirements tools/extractors/python/trafilatura/requirements.txt -- python3 -c 'import trafilatura'
-        uv run --no-project --with-requirements tools/extractors/python/resiliparse/requirements.txt -- python3 -c 'from resiliparse.extract.html2text import extract_plain_text'
+        bwrap --version
+        # Pin the complete PyPy distribution; uv installs packages into the
+        # explicit asset tree, never at extraction time.
+        archive="$RUNNER_TEMP/pypy3.12-v8.0.1-linux64.tar.gz"
+        curl --fail --silent --show-error --location --retry 2 https://downloads.python.org/pypy/pypy3.12-v8.0.1-linux64.tar.gz -o "$archive"
+        printf '%s  %s\n' aeed27797777296d9c94e53bdfa608804696dbd4ff9f2213003cce064ee46ef8 "$archive" | sha256sum --check
+        tar -xzf "$archive" -C "$RUNNER_TEMP"
+        tools/extractors/provision-python.sh tools/extractors "$RUNNER_TEMP/pypy3.12-v8.0.1-linux64/bin/pypy3" html2text markdownify
+        uv python install 3.12.15 --no-bin
+        tools/extractors/provision-python.sh tools/extractors "$(uv python find 3.12.15 --managed-python)" trafilatura resiliparse
         cargo test --locked --all-targets --all-features -- --skip scores::tests::e2m_handles_images_without_image_paths
         # Vote-web has its own lock file; it shares the same native compiler pin.
         cargo fmt --manifest-path vote-web/Cargo.toml --all -- --check
@@ -46,7 +54,9 @@ jobs:
         python3 -m venv "$RUNNER_TEMP/uv-bootstrap"
         "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.9"
         export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
-        uv run --no-project --python 3.12 --with-requirements tools/extractors/python/e2m/requirements.txt -- python3 -c 'from wisup_e2m import HtmlParser'
+        bwrap --version
+        uv python install 3.12.15 --no-bin
+        tools/extractors/provision-python.sh tools/extractors "$(uv python find 3.12.15 --managed-python)" e2m
         # Worker tests spawn the real binary, not a Rust test harness.
         cargo build --locked --all-features
         cargo test --locked --all-features e2m_handles_images_without_image_paths -- --nocapture

@@ -1,3 +1,6 @@
 /target
 out
 /data
+
+/tools/extractors/python/*/runtime
+/tools/extractors/python/*/packages/
