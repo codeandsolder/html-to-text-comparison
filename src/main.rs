@@ -52,84 +52,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("--server takes no positional arguments; use --config".into());
         }
         web::start_server(config.server, config.execution).await?;
-    } else if !arguments.is_empty() {
-        let CliArgs {
-            extractor,
-            mut method,
-            input,
-            base_url,
-        } = parse_cli_args(&arguments)?;
-        let states = ExtractorStates::default();
-        let mut names: Vec<_> = if let Some(extractor) = extractor.as_deref() {
-            let known = states.states.contains_key(extractor);
-            #[cfg(feature = "reader-lm-api")]
-            let known = known || extractor == "reader-lm-api";
-            if !known {
-                return Err(format!("unknown extractor: {extractor}").into());
-            }
-            vec![extractor.to_string()]
-        } else {
-            states.states.keys().cloned().collect()
-        };
-        names.sort();
-        let current_dir = std::env::current_dir()?;
-        let out_dir = current_dir.join("out");
-
-        let (html, url) = if std::path::Path::new(&input).is_file() {
-            if method != acquisition::Acquisition::Http {
-                return Err("browser acquisition requires an HTTP(S) URL, not a file".into());
-            }
-            method = acquisition::Acquisition::File;
-            let html =
-                acquisition::read_html_file(Path::new(&input), config.execution.max_html_bytes)?;
-            let canonical = std::fs::canonicalize(&input)?;
-            let url = match base_url {
-                Some(url) => url,
-                None => url::Url::from_file_path(canonical)
-                    .map_err(|()| std::io::Error::other("Cannot represent input file as URL"))?,
-            };
-            (html, url)
-        } else {
-            if base_url.is_some() {
-                return Err("--base-url only applies to a local HTML snapshot".into());
-            }
-            let url = url::Url::parse(&input)?;
-            let html = method.acquire(&url, &config.execution)?;
-            (html, url)
-        };
-
-        if out_dir.exists() {
-            std::fs::remove_dir_all(&out_dir)?;
-        }
-        std::fs::create_dir_all(&out_dir)?;
-
-        let snapshot_path = out_dir.join("source.html");
-        std::fs::write(&snapshot_path, &html)?;
-        println!("Acquisition: {method:?}, HTML Size (bytes): {}", html.len());
-
-        let mut runner = runner::Runner::new(out_dir, html, config.execution);
-        for name in names {
-            runner.run_isolated(&name, &name, url.as_str(), &states);
-        }
-        #[cfg(feature = "reader-lm-api")]
-        if extractor.is_none() {
-            runner.run_isolated("reader-lm-api", "reader-lm-api", url.as_str(), &states);
-        }
-
-        println!("{}", runner.into_table());
-        println!("Remember to check the output files to make sure they have parsed the information you expect!");
+    } else if arguments.is_empty() {
+        print_usage(&program);
     } else {
-        eprintln!("Usage:");
-        eprintln!("  {} <url_or_file>     Run all extractors", program);
-        eprintln!(
-            "  {} --extractor <name> [--base-url URL] <url_or_file>     Run one extractor",
-            program
-        );
-        eprintln!("  {} --acquire {{http|lightpanda|cloakbrowser}} [--extractor NAME] <url>  One acquisition", program);
-        eprintln!("  {} [--config FILE] --server   Start web server", program);
-        eprintln!();
-        eprintln!("Prefix either mode with --config FILE to load explicit runtime settings.");
+        run_cli(&arguments, config.execution)?;
     }
+    Ok(())
+}
+
+fn print_usage(program: &str) {
+    eprintln!("Usage:");
+    eprintln!("  {program} [--config FILE] <url_or_file>     Run all extractors");
+    eprintln!("  {program} [--config FILE] --extractor NAME [--base-url URL] <url_or_file>     Run one extractor");
+    eprintln!("  {program} [--config FILE] --acquire {{http|lightpanda|cloakbrowser}} [--extractor NAME] <url>     One acquisition");
+    eprintln!("  {program} [--config FILE] --server     Start web server");
+}
+
+fn run_cli(
+    arguments: &[String],
+    policy: runtime_config::ExecutionPolicy,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let CliArgs {
+        extractor,
+        mut method,
+        input,
+        base_url,
+    } = parse_cli_args(arguments)?;
+    let states = ExtractorStates::default();
+    let mut names: Vec<_> = if let Some(extractor) = extractor.as_deref() {
+        let known = states.states.contains_key(extractor);
+        #[cfg(feature = "reader-lm-api")]
+        let known = known || extractor == "reader-lm-api";
+        if !known {
+            return Err(format!("unknown extractor: {extractor}").into());
+        }
+        vec![extractor.to_string()]
+    } else {
+        states.states.keys().cloned().collect()
+    };
+    names.sort();
+    let current_dir = std::env::current_dir()?;
+    let out_dir = current_dir.join("out");
+
+    let (html, url) = if std::path::Path::new(&input).is_file() {
+        if method != acquisition::Acquisition::Http {
+            return Err("browser acquisition requires an HTTP(S) URL, not a file".into());
+        }
+        method = acquisition::Acquisition::File;
+        let html = acquisition::read_html_file(Path::new(&input), policy.max_html_bytes)?;
+        let canonical = std::fs::canonicalize(&input)?;
+        let url = match base_url {
+            Some(url) => url,
+            None => url::Url::from_file_path(canonical)
+                .map_err(|()| std::io::Error::other("Cannot represent input file as URL"))?,
+        };
+        (html, url)
+    } else {
+        if base_url.is_some() {
+            return Err("--base-url only applies to a local HTML snapshot".into());
+        }
+        let url = url::Url::parse(&input)?;
+        let html = method.acquire(&url, &policy)?;
+        (html, url)
+    };
+
+    if out_dir.exists() {
+        std::fs::remove_dir_all(&out_dir)?;
+    }
+    std::fs::create_dir_all(&out_dir)?;
+
+    let snapshot_path = out_dir.join("source.html");
+    std::fs::write(&snapshot_path, &html)?;
+    println!("Acquisition: {method:?}, HTML Size (bytes): {}", html.len());
+
+    let mut runner = runner::Runner::new(out_dir, html, policy);
+    for name in names {
+        runner.run_isolated(&name, &name, url.as_str(), &states);
+    }
+    #[cfg(feature = "reader-lm-api")]
+    if extractor.is_none() {
+        runner.run_isolated("reader-lm-api", "reader-lm-api", url.as_str(), &states);
+    }
+
+    println!("{}", runner.into_table());
+    println!("Remember to check the output files to make sure they have parsed the information you expect!");
     Ok(())
 }
 
