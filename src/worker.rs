@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     extractor_config::ExtractorStates,
     runner::{ExtractionStatus, Runner, Stats},
+    runtime_config::ExecutionPolicy,
     scores::run_named_extractor,
 };
 
@@ -22,6 +23,7 @@ struct Request {
     url: String,
     snapshot_path: PathBuf,
     states: ExtractorStates,
+    policy: ExecutionPolicy,
     output_dir: PathBuf,
 }
 
@@ -55,22 +57,6 @@ fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Maximum accepted output of an individual extractor (not input HTML).
-/// Enforced in both the native runner and external command capture.
-pub fn max_output_bytes() -> Result<usize, String> {
-    const DEFAULT: usize = 64 * 1024 * 1024;
-    const UPPER: usize = 1024 * 1024 * 1024;
-    let limit = std::env::var("HTML_TO_TEXT_MAX_OUTPUT_BYTES").map_or(Ok(DEFAULT), |value| {
-        value
-            .parse::<usize>()
-            .map_err(|error| format!("invalid HTML_TO_TEXT_MAX_OUTPUT_BYTES: {error}"))
-    })?;
-    if !(1..=UPPER).contains(&limit) {
-        return Err(format!("HTML_TO_TEXT_MAX_OUTPUT_BYTES must be 1..={UPPER}"));
-    }
-    Ok(limit)
-}
-
 /// Worker requests may only access the immutable snapshot owned by their
 /// run directory. Reject missing files, symlinks escaping that directory,
 /// and giant inputs before allocating the snapshot string.
@@ -83,23 +69,10 @@ fn read_snapshot(request: &Request) -> Result<String, String> {
     if source != expected {
         return Err("worker snapshot is not the run's immutable source.html".to_string());
     }
-    let limit = crate::acquisition::max_html_bytes()?;
-    let size = fs::metadata(&source)
-        .map_err(|error| format!("reading snapshot metadata: {error}"))?
-        .len();
-    if size > u64::try_from(limit).unwrap_or(u64::MAX) {
-        return Err(format!("worker snapshot exceeds {limit} byte limit"));
-    }
-    let html =
-        fs::read_to_string(&source).map_err(|error| format!("reading UTF-8 snapshot: {error}"))?;
-    if html.len() > limit {
-        return Err(format!("worker snapshot exceeds {limit} byte limit"));
-    }
-    Ok(html)
+    crate::acquisition::read_html_file(&source, request.policy.max_html_bytes)
 }
 
-pub fn worker_main() -> Result<(), String> {
-    let mut args = std::env::args_os().skip(2);
+pub fn worker_main(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<(), String> {
     let request_path = args.next().ok_or("missing worker request path")?;
     let reply_path = args.next().ok_or("missing worker reply path")?;
     if args.next().is_some() {
@@ -110,6 +83,7 @@ pub fn worker_main() -> Result<(), String> {
     )
     .map_err(|error| format!("parsing worker request: {error}"))?;
 
+    request.policy.validate()?;
     validate_name(&request.name)?;
     let known = request.states.states.contains_key(&request.key);
     #[cfg(feature = "reader-lm-api")]
@@ -119,7 +93,7 @@ pub fn worker_main() -> Result<(), String> {
     }
     let parsed_url = url::Url::parse(&request.url).map_err(|error| error.to_string())?;
     let html = read_snapshot(&request)?;
-    let mut runner = Runner::new(request.output_dir, html);
+    let mut runner = Runner::new(request.output_dir, html, request.policy);
     run_named_extractor(
         &mut runner,
         &request.states,
@@ -142,19 +116,14 @@ pub fn worker_main() -> Result<(), String> {
     .map_err(|error| format!("writing worker response: {error}"))
 }
 
+#[cfg(not(test))]
 fn worker_executable() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("HTML_TO_TEXT_WORKER_EXE") {
-        return Ok(PathBuf::from(path));
-    }
-    let current = std::env::current_exe().map_err(|error| error.to_string())?;
-    let is_test_harness = current.file_name().is_some_and(|name| {
-        name.to_string_lossy()
-            .starts_with("html_to_text_comparison-")
-    });
-    if !is_test_harness {
-        return Ok(current);
-    }
+    std::env::current_exe().map_err(|error| error.to_string())
+}
 
+#[cfg(test)]
+fn worker_executable() -> Result<PathBuf, String> {
+    let current = std::env::current_exe().map_err(|error| error.to_string())?;
     // Cargo may place the unit-test harness under deps/ OR under
     // build/<crate>/<hash>/out when an ephemeral build wrapper is active.
     // Both layouts keep the profile (debug/release) in the ancestry.
@@ -395,11 +364,11 @@ fn wait_for_child_with_capture(
 
 pub fn execute_isolated(
     out_dir: &Path,
-    snapshot_path: &Path,
     key: &str,
     name: &str,
     url: &str,
     states: &ExtractorStates,
+    policy: &ExecutionPolicy,
     timeout: Duration,
 ) -> Result<Stats, ExecutionError> {
     let execute = || -> Result<Stats, String> {
@@ -412,8 +381,9 @@ pub fn execute_isolated(
             key: key.to_string(),
             name: name.to_string(),
             url: url.to_string(),
-            snapshot_path: snapshot_path.to_path_buf(),
+            snapshot_path: out_dir.join("source.html"),
             states: states.clone(),
+            policy: policy.clone(),
             output_dir: out_dir.to_path_buf(),
         };
         fs::write(
@@ -454,7 +424,7 @@ pub fn execute_isolated(
                     .map_err(|error| format!("worker did not write output: {error}"))?
                     .len();
                 if reply.stat.status.is_success()
-                    && actual_size > u64::try_from(max_output_bytes()?).unwrap_or(u64::MAX)
+                    && actual_size > u64::try_from(policy.max_output_bytes).unwrap_or(u64::MAX)
                 {
                     return Err("worker output exceeds configured byte limit".to_string());
                 }
@@ -496,6 +466,7 @@ mod tests {
             url: "https://example.com/shared".to_string(),
             snapshot_path: source,
             states: ExtractorStates::default(),
+            policy: ExecutionPolicy::default(),
             output_dir: directory.path().to_path_buf(),
         };
         let ipc = serde_json::to_vec(&request)?;
@@ -513,6 +484,29 @@ mod tests {
     }
 
     #[test]
+    fn worker_enforces_the_policy_serialized_by_parent() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let snapshot_path = root.path().join("source.html");
+        fs::write(&snapshot_path, "x".repeat(65))?;
+        let request = Request {
+            key: "nanohtml2text".to_string(),
+            name: "nanohtml2text".to_string(),
+            url: "https://example.com/".to_string(),
+            snapshot_path,
+            states: ExtractorStates::default(),
+            policy: ExecutionPolicy {
+                max_html_bytes: 64,
+                ..ExecutionPolicy::default()
+            },
+            output_dir: root.path().to_path_buf(),
+        };
+        let decoded: Request = serde_json::from_slice(&serde_json::to_vec(&request)?)?;
+        assert_eq!(decoded.policy.max_html_bytes, 64);
+        assert!(read_snapshot(&decoded).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn worker_snapshot_path_cannot_escape_owned_run_directory(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let owned = tempfile::tempdir()?;
@@ -525,6 +519,7 @@ mod tests {
             url: "https://example.com/".to_string(),
             snapshot_path: other_source,
             states: ExtractorStates::default(),
+            policy: ExecutionPolicy::default(),
             output_dir: owned.path().to_path_buf(),
         };
         assert!(read_snapshot(&request).is_err());
@@ -546,6 +541,7 @@ mod tests {
             url: "https://example.com/".to_string(),
             snapshot_path: symlink,
             states: ExtractorStates::default(),
+            policy: ExecutionPolicy::default(),
             output_dir: owned.path().to_path_buf(),
         };
         assert!(read_snapshot(&request).is_err());

@@ -1,0 +1,163 @@
+//! Explicit, validated process configuration, shared across the worker boundary.
+
+use serde::{Deserialize, Serialize};
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+const DEFAULT_BYTE_LIMIT: usize = 64 * 1024 * 1024;
+const MAX_BYTE_LIMIT: usize = 1024 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ExecutionPolicy {
+    pub max_html_bytes: usize,
+    pub max_output_bytes: usize,
+    pub browser_timeout_ms: u64,
+    pub node_modules: PathBuf,
+    pub webclaw_bin: PathBuf,
+    pub html_to_markdown_go_bin: PathBuf,
+}
+
+impl Default for ExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            max_html_bytes: DEFAULT_BYTE_LIMIT,
+            max_output_bytes: DEFAULT_BYTE_LIMIT,
+            browser_timeout_ms: 120_000,
+            node_modules: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tools/extractors/node_modules"),
+            webclaw_bin: "webclaw".into(),
+            html_to_markdown_go_bin: "html2markdown".into(),
+        }
+    }
+}
+
+impl ExecutionPolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        for (field, value) in [
+            ("max_html_bytes", self.max_html_bytes),
+            ("max_output_bytes", self.max_output_bytes),
+        ] {
+            if !(1..=MAX_BYTE_LIMIT).contains(&value) {
+                return Err(format!("{field} must be 1..={MAX_BYTE_LIMIT}"));
+            }
+        }
+        if !(1_000..=900_000).contains(&self.browser_timeout_ms) {
+            return Err("browser_timeout_ms must be 1,000..=900,000".to_owned());
+        }
+        for (field, path) in [
+            ("node_modules", &self.node_modules),
+            ("webclaw_bin", &self.webclaw_bin),
+            ("html_to_markdown_go_bin", &self.html_to_markdown_go_bin),
+        ] {
+            if path.as_os_str().is_empty() {
+                return Err(format!("{field} must not be empty"));
+            }
+        }
+        Ok(())
+    }
+
+    pub const fn browser_timeout(&self) -> Duration {
+        Duration::from_millis(self.browser_timeout_ms)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ServerConfig {
+    pub listen: SocketAddr,
+    pub data_dir: PathBuf,
+    pub max_saved_runs: usize,
+    pub max_concurrent_runs: usize,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 3000)),
+            data_dir: "data".into(),
+            max_saved_runs: 100,
+            max_concurrent_runs: 2,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RuntimeConfig {
+    pub execution: ExecutionPolicy,
+    pub server: ServerConfig,
+}
+
+impl RuntimeConfig {
+    pub fn load(path: Option<&Path>) -> Result<Self, Box<dyn std::error::Error>> {
+        let config = if let Some(path) = path {
+            serde_json::from_slice(&std::fs::read(path)?)?
+        } else {
+            Self::default()
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        self.execution.validate()?;
+        if self.server.data_dir.as_os_str().is_empty() {
+            return Err("data_dir must not be empty".to_owned());
+        }
+        if self.server.max_saved_runs == 0 {
+            return Err("max_saved_runs must be positive".to_owned());
+        }
+        if !(1..=64).contains(&self.server.max_concurrent_runs) {
+            return Err("max_concurrent_runs must be 1..=64".to_owned());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_configuration_has_one_source_of_defaults() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let config: RuntimeConfig = serde_json::from_str(
+            r#"{"execution":{"max_output_bytes":128},"server":{"listen":"[::1]:8080"}}"#,
+        )?;
+        config.validate()?;
+        assert_eq!(config.execution.max_output_bytes, 128);
+        assert_eq!(config.execution.max_html_bytes, DEFAULT_BYTE_LIMIT);
+        assert_eq!(config.execution.browser_timeout(), Duration::from_secs(120));
+        assert_eq!(config.server.listen.to_string(), "[::1]:8080");
+        assert_eq!(config.server.max_saved_runs, 100);
+        assert_eq!(config.server.max_concurrent_runs, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_and_out_of_range_configuration_is_rejected() {
+        for input in [
+            r#"{"execution":{"max_html_bytes":0}}"#,
+            r#"{"execution":{"max_output_bytes":1073741825}}"#,
+            r#"{"execution":{"browser_timeout_ms":999}}"#,
+            r#"{"execution":{"webclaw_bin":""}}"#,
+            r#"{"server":{"max_concurrent_runs":65}}"#,
+            r#"{"server":{"max_saved_runs":0}}"#,
+            r#"{"server":{"data_dir":""}}"#,
+            r#"{"server":{"listen":"not an address"}}"#,
+            r#"{"execution":{"max_ouput_bytes":128}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<RuntimeConfig>(input)
+                    .map_err(|error| error.to_string())
+                    .and_then(|config| config.validate())
+                    .is_err(),
+                "{input}"
+            );
+        }
+    }
+}

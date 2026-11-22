@@ -11,6 +11,7 @@ use crate::extractor_config::{
     PercollateConfig, TrafilaturaConfig, TurndownConfig, DEFAULT_SKIP_TAGS,
 };
 use crate::runner::{ExtractionStatus, Runner};
+use crate::runtime_config::ExecutionPolicy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
@@ -57,6 +58,7 @@ pub struct ExtractorPreview {
 
 impl Score {
     pub fn new(
+        policy: &ExecutionPolicy,
         url: String,
         html: String,
         acquisition: Acquisition,
@@ -72,7 +74,7 @@ impl Score {
         let source_html_file = out_dir.join("source.html");
         fs::write(&source_html_file, &html).map_err(|error| error.to_string())?;
 
-        let mut runner = Runner::new(out_dir.clone(), html);
+        let mut runner = Runner::new(out_dir.clone(), html, policy.clone());
         let states = states.clone();
 
         for extractor_name in enabled_extractors(&states) {
@@ -465,14 +467,16 @@ pub fn run_named_extractor(
             let extractor_key = extractor_key.to_string();
             let states = states.clone();
             let parsed_url = parsed_url.clone();
+            let policy = runner.policy().clone();
             runner.run(output_name, move |html| {
-                run_cli_extractor(&extractor_key, html, &states, &parsed_url)
+                run_cli_extractor(&policy, &extractor_key, html, &states, &parsed_url)
             });
         }
     }
 }
 
 pub fn compare_single_extractor_settings(
+    policy: &ExecutionPolicy,
     url: &str,
     html: &str,
     extractor: &str,
@@ -492,7 +496,7 @@ pub fn compare_single_extractor_settings(
     let source_html_file = out_dir.join("source.html");
     fs::write(&source_html_file, html).map_err(|error| error.to_string())?;
 
-    let mut runner = Runner::new(out_dir.clone(), html.to_string());
+    let mut runner = Runner::new(out_dir.clone(), html.to_string(), policy.clone());
     let baseline_name = format!("{extractor} baseline");
     let candidate_name = format!("{extractor} current settings");
     runner.run_isolated(
@@ -553,6 +557,7 @@ pub fn compare_single_extractor_settings(
 }
 
 pub fn preview_single_extractor_settings(
+    policy: &ExecutionPolicy,
     url: &str,
     html: &str,
     extractor: &str,
@@ -565,7 +570,7 @@ pub fn preview_single_extractor_settings(
     let out_dir = temporary.path().to_path_buf();
     std::fs::write(out_dir.join("source.html"), html)
         .map_err(|error| format!("writing temporary preview snapshot: {error}"))?;
-    let mut runner = Runner::new(out_dir.clone(), html.to_string());
+    let mut runner = Runner::new(out_dir.clone(), html.to_string(), policy.clone());
     runner.run_isolated(extractor, extractor, parsed_url.as_str(), &states);
 
     let stat = runner.into_stats().into_iter().next().unwrap_or_default();
@@ -603,6 +608,7 @@ fn single_extractor_state(
 }
 
 pub fn run_extraction(
+    policy: &ExecutionPolicy,
     url: &str,
     html: &str,
     acquisition: Acquisition,
@@ -610,6 +616,7 @@ pub fn run_extraction(
     score_store: &ScoreStore,
 ) -> Result<Score, String> {
     let score = Score::new(
+        policy,
         url.to_string(),
         html.to_string(),
         acquisition,
@@ -632,6 +639,7 @@ fn chrono_lite_now() -> String {
 }
 
 pub fn run_cli_extractor(
+    policy: &ExecutionPolicy,
     extractor_key: &str,
     html: &str,
     states: &ExtractorStates,
@@ -639,6 +647,7 @@ pub fn run_cli_extractor(
 ) -> Result<String, String> {
     match extractor_key {
         "turndown" => run_turndown(
+            policy,
             html,
             &states
                 .states
@@ -649,14 +658,16 @@ pub fn run_cli_extractor(
                 .collect::<Vec<_>>(),
         ),
         "percollate" => run_percollate(
+            policy,
             html,
             &states
                 .states
                 .get("percollate")
                 .map_or_default(|s| s.config.percollate.clone()),
         ),
-        "resiliparse" => run_resiliparse(html),
+        "resiliparse" => run_resiliparse(policy, html),
         "trafilatura" => run_trafilatura(
+            policy,
             html,
             &states
                 .states
@@ -664,26 +675,29 @@ pub fn run_cli_extractor(
                 .map_or_default(|s| s.config.trafilatura.clone()),
         ),
         "html2text-py" => run_html2text_py(
+            policy,
             html,
             &states
                 .states
                 .get("html2text-py")
                 .map_or_default(|s| s.config.html2text_py.clone()),
         ),
-        "mozilla-readability" => run_mozilla_readability(html),
+        "mozilla-readability" => run_mozilla_readability(policy, html),
         "defuddle" | "node-html-markdown" | "webforai" => {
-            run_node_snapshot_parser(extractor_key, html, parsed_url)
+            run_node_snapshot_parser(policy, extractor_key, html, parsed_url)
         }
         "markdownify" => run_markdownify(
+            policy,
             html,
             &states
                 .states
                 .get("markdownify")
                 .map_or_default(|s| s.config.markdownify.clone()),
         ),
-        "webclaw" => run_webclaw(html, states),
-        "e2m" => run_e2m(html, states),
+        "webclaw" => run_webclaw(policy, html, states),
+        "e2m" => run_e2m(policy, html, states),
         "html-to-markdown-go" => run_html_to_markdown_go(
+            policy,
             html,
             parsed_url,
             &states
@@ -704,38 +718,36 @@ pub fn run_cli_extractor(
                     "url": parsed_url.as_str()
                 }))
                 .map_err(|error| format!("reader-lm-api request failed: {error}"))?;
-            let mut body = String::new();
+            let limit = policy.max_output_bytes;
+            let mut body = Vec::new();
             response
                 .into_body()
                 .into_reader()
-                .read_to_string(&mut body)
+                .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+                .read_to_end(&mut body)
                 .map_err(|error| format!("reader-lm-api read failed: {error}"))?;
-            Ok(body)
+            if body.len() > limit {
+                return Err(format!("reader-lm-api output exceeds {limit} byte limit"));
+            }
+            String::from_utf8(body)
+                .map_err(|error| format!("reader-lm-api returned invalid UTF-8: {error}"))
         }
         _ => Err(format!("unknown extractor: {extractor_key}")),
     }
 }
 
-/// Installed with npm ci --prefix tools/extractors; can be overridden for packaged deployments.
-fn extractor_node_modules() -> PathBuf {
-    std::env::var_os("HTML_TO_TEXT_NODE_MODULES").map_or_else(
-        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/extractors/node_modules"),
-        PathBuf::from,
-    )
-}
-
 // Keep external converter descendants in their isolated worker's process
 // group; the worker's parent owns the actual extractor deadline.
 trait BoundedOutput {
-    fn bounded_output(&mut self) -> Result<std::process::Output, String>;
+    fn bounded_output(&mut self, max_output_bytes: usize) -> Result<std::process::Output, String>;
 }
 
 impl BoundedOutput for std::process::Command {
-    fn bounded_output(&mut self) -> Result<std::process::Output, String> {
+    fn bounded_output(&mut self, max_output_bytes: usize) -> Result<std::process::Output, String> {
         crate::worker::run_bounded_command(
             self,
             std::time::Duration::from_mins(15),
-            crate::worker::max_output_bytes()?,
+            max_output_bytes,
         )
     }
 }
@@ -766,7 +778,12 @@ fn command_output_text(
     Ok(text)
 }
 
-fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> Result<String, String> {
+fn run_turndown(
+    policy: &ExecutionPolicy,
+    html: &str,
+    cfg: &TurndownConfig,
+    remove_tags: &[&str],
+) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("turndown_{}.html", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, html)
         .map_err(|error| format!("writing temporary extractor input: {error}"))?;
@@ -785,13 +802,13 @@ fn run_turndown(html: &str, cfg: &TurndownConfig, remove_tags: &[&str]) -> Resul
     let remove_tags_json = serde_json::to_string(remove_tags).unwrap_or_else(|_| "[]".to_string());
     let node_code = r"const fs = require('fs'); const td = require('turndown'); const options = JSON.parse(process.argv[2]); const removeTags = JSON.parse(process.argv[3]); const svc = new td(options); for (const tag of removeTags) svc.remove(tag); const html = fs.readFileSync(process.argv[1], 'utf8'); process.stdout.write(svc.turndown(html))";
     let out = std::process::Command::new("node")
-        .env("NODE_PATH", extractor_node_modules())
+        .env("NODE_PATH", &policy.node_modules)
         .arg("-e")
         .arg(node_code)
         .arg(&tmp)
         .arg(options.to_string())
         .arg(remove_tags_json)
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "turndown")
@@ -814,9 +831,14 @@ fn normalize_percollate_marker(value: &str, allowed: &[char]) -> Option<char> {
     }
 }
 
-fn build_percollate_args(input_path: &std::path::Path, cfg: &PercollateConfig) -> Vec<String> {
+fn build_percollate_args(
+    policy: &ExecutionPolicy,
+    input_path: &std::path::Path,
+    cfg: &PercollateConfig,
+) -> Vec<String> {
     let mut args = vec![
-        extractor_node_modules()
+        policy
+            .node_modules
             .join("percollate/cli.js")
             .display()
             .to_string(),
@@ -856,20 +878,29 @@ fn build_percollate_args(input_path: &std::path::Path, cfg: &PercollateConfig) -
     args
 }
 
-fn run_percollate(html: &str, cfg: &PercollateConfig) -> Result<String, String> {
+fn run_percollate(
+    policy: &ExecutionPolicy,
+    html: &str,
+    cfg: &PercollateConfig,
+) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("percollate_in_{}.html", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, html)
         .map_err(|error| format!("writing temporary extractor input: {error}"))?;
-    let args = build_percollate_args(&tmp, cfg);
+    let args = build_percollate_args(policy, &tmp, cfg);
     let out = std::process::Command::new("node")
         .args(&args)
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "percollate")
 }
 
-fn run_node_snapshot_parser(kind: &str, html: &str, url: &url::Url) -> Result<String, String> {
+fn run_node_snapshot_parser(
+    policy: &ExecutionPolicy,
+    kind: &str,
+    html: &str,
+    url: &url::Url,
+) -> Result<String, String> {
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -879,21 +910,21 @@ fn run_node_snapshot_parser(kind: &str, html: &str, url: &url::Url) -> Result<St
         .arg(kind)
         .arg(input.path())
         .arg(url.as_str())
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
     command_output_text(output, kind)
 }
 
 /// The original Mozilla Readability JS implementation. The DOM is built
 /// from the *acquired HTML snapshot*; no browser navigation or website fetch.
-fn run_mozilla_readability(html: &str) -> Result<String, String> {
+fn run_mozilla_readability(policy: &ExecutionPolicy, html: &str) -> Result<String, String> {
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
     let script = r"const fs = require('fs'); const {parseHTML} = require('linkedom'); const {Readability} = require('@mozilla/readability'); const html = fs.readFileSync(process.argv[1], 'utf8'); const {document} = parseHTML(html); const result = new Readability(document).parse(); if (!result) { console.error('No readable content'); process.exit(2); } process.stdout.write(result.textContent || '')";
     let out = std::process::Command::new("node")
-        .env("NODE_PATH", extractor_node_modules())
+        .env("NODE_PATH", &policy.node_modules)
         .args(["-e", script])
         .arg(input.path())
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
     command_output_text(out, "mozilla-readability")
 }
 
@@ -906,7 +937,7 @@ fn python_requirements(name: &str) -> std::path::PathBuf {
 
 /// Independent Lexbor-based content extractor operating exclusively on
 /// the acquired HTML, with no URL or network access.
-fn run_resiliparse(html: &str) -> Result<String, String> {
+fn run_resiliparse(policy: &ExecutionPolicy, html: &str) -> Result<String, String> {
     let input = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
     std::fs::write(input.path(), html).map_err(|error| error.to_string())?;
     let script = r"import sys; from pathlib import Path; from resiliparse.extract.html2text import extract_plain_text; html = Path(sys.argv[1]).read_text(encoding='utf-8'); print(extract_plain_text(html, main_content=True, preserve_formatting=True), end='')";
@@ -915,11 +946,15 @@ fn run_resiliparse(html: &str) -> Result<String, String> {
         .arg(python_requirements("resiliparse"))
         .args(["--", "python3", "-c", script])
         .arg(input.path())
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
     command_output_text(out, "resiliparse")
 }
 
-fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> Result<String, String> {
+fn run_trafilatura(
+    policy: &ExecutionPolicy,
+    html: &str,
+    cfg: &TrafilaturaConfig,
+) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("trafilatura_{}.html", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, html)
         .map_err(|error| format!("writing temporary extractor input: {error}"))?;
@@ -932,13 +967,17 @@ fn run_trafilatura(html: &str, cfg: &TrafilaturaConfig) -> Result<String, String
         .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "trafilatura")
 }
 
-fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> Result<String, String> {
+fn run_html2text_py(
+    policy: &ExecutionPolicy,
+    html: &str,
+    cfg: &Html2TextPythonConfig,
+) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("h2t_py_{}.html", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, html)
         .map_err(|error| format!("writing temporary extractor input: {error}"))?;
@@ -951,7 +990,7 @@ fn run_html2text_py(html: &str, cfg: &Html2TextPythonConfig) -> Result<String, S
         .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "html2text.py")
@@ -1053,7 +1092,11 @@ fn build_markdownify_config_json(cfg: &MarkdownifyConfig) -> Result<String, Stri
     .map_err(|error| error.to_string())
 }
 
-fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> Result<String, String> {
+fn run_markdownify(
+    policy: &ExecutionPolicy,
+    html: &str,
+    cfg: &MarkdownifyConfig,
+) -> Result<String, String> {
     let tmp = std::env::temp_dir().join(format!("markdownify_{}.html", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, html)
         .map_err(|error| format!("writing temporary extractor input: {error}"))?;
@@ -1066,13 +1109,17 @@ fn run_markdownify(html: &str, cfg: &MarkdownifyConfig) -> Result<String, String
         .args(["--", "python3", "-c", script])
         .arg(&tmp)
         .arg(cfg_json)
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "markdownify")
 }
 
-fn run_webclaw(html: &str, states: &ExtractorStates) -> Result<String, String> {
+fn run_webclaw(
+    policy: &ExecutionPolicy,
+    html: &str,
+    states: &ExtractorStates,
+) -> Result<String, String> {
     let cfg = states
         .states
         .get("webclaw")
@@ -1098,11 +1145,10 @@ fn run_webclaw(html: &str, states: &ExtractorStates) -> Result<String, String> {
     } else {
         cfg.format
     });
-    let binary = std::env::var_os("HTML_TO_TEXT_WEBCLAW_BIN")
-        .unwrap_or_else(|| std::ffi::OsString::from("webclaw"));
+    let binary = &policy.webclaw_bin;
     let out = std::process::Command::new(binary)
         .args(&args)
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
 
     let _ = std::fs::remove_file(&tmp);
     command_output_text(out, "webclaw")
@@ -1175,7 +1221,11 @@ result = parser._prepare_unstructured_data_to_e2m_parsed_data(
 print(result.text, end="")
 "#;
 
-fn run_e2m(html: &str, states: &ExtractorStates) -> Result<String, String> {
+fn run_e2m(
+    policy: &ExecutionPolicy,
+    html: &str,
+    states: &ExtractorStates,
+) -> Result<String, String> {
     let cfg = states
         .states
         .get("e2m")
@@ -1220,7 +1270,7 @@ fn run_e2m(html: &str, states: &ExtractorStates) -> Result<String, String> {
                 "false"
             },
         ])
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
 
     let _ = std::fs::remove_file(&tmp);
     let _ = std::fs::remove_dir_all(&work_dir);
@@ -1261,13 +1311,13 @@ fn build_html_to_markdown_go_args(
 }
 
 fn run_html_to_markdown_go(
+    policy: &ExecutionPolicy,
     html: &str,
     parsed_url: &url::Url,
     cfg: &HtmlToMarkdownGoConfig,
 ) -> Result<String, String> {
     let args = build_html_to_markdown_go_args(parsed_url, cfg);
-    let binary = std::env::var_os("HTML_TO_MARKDOWN_GO_BIN")
-        .unwrap_or_else(|| std::ffi::OsString::from("html2markdown"));
+    let binary = &policy.html_to_markdown_go_bin;
     // Supply a seekable, anonymous file as stdin. Writing a large document
     // synchronously into a child's stdin pipe can deadlock if the child also
     // fills its stdout pipe before we start draining it.
@@ -1282,7 +1332,7 @@ fn run_html_to_markdown_go(
     let out = std::process::Command::new(binary)
         .args(&args)
         .stdin(std::process::Stdio::from(input))
-        .bounded_output();
+        .bounded_output(policy.max_output_bytes);
     command_output_text(out, "html-to-markdown-go")
 }
 
@@ -1529,6 +1579,7 @@ mod tests {
         }
 
         let run = run_extraction(
+            &ExecutionPolicy::default(),
             "https://example.com/article",
             "<h1>Saved exactly once</h1>",
             Acquisition::File,
@@ -1558,6 +1609,7 @@ mod tests {
             entry.enabled = false;
         }
         let mut first = run_extraction(
+            &ExecutionPolicy::default(),
             "https://example.com/",
             "<h1>first</h1>",
             Acquisition::File,
@@ -1565,6 +1617,7 @@ mod tests {
             &store,
         )?;
         let mut second = run_extraction(
+            &ExecutionPolicy::default(),
             "https://example.com/",
             "<h1>second</h1>",
             Acquisition::File,
@@ -1596,6 +1649,7 @@ mod tests {
             entry.enabled = false;
         }
         let mut score = Score::new(
+            &ExecutionPolicy::default(),
             "https://example.com/".to_string(),
             "<h1>fixture</h1>".to_string(),
             Acquisition::File,
@@ -1651,6 +1705,7 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..3 {
             let run = run_extraction(
+                &ExecutionPolicy::default(),
                 "https://example.com/",
                 "one",
                 Acquisition::File,
@@ -1704,6 +1759,7 @@ mod tests {
         };
 
         let score = compare_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "html2text",
@@ -1752,6 +1808,7 @@ mod tests {
         };
 
         let score = compare_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "htmd",
@@ -1791,6 +1848,7 @@ mod tests {
         };
 
         let score = compare_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "turndown",
@@ -1812,7 +1870,7 @@ mod tests {
 
     #[test]
     fn turndown_removes_script_content() -> Result<(), Box<dyn std::error::Error>> {
-        let output = run_turndown(
+        let output = run_turndown(&ExecutionPolicy::default(),
             "<html><body><article><p>Body</p></article><script>if(window.foo){bar()}</script></body></html>",
             &TurndownConfig::default(),
             &["script", "style", "noscript"],
@@ -1847,6 +1905,7 @@ mod tests {
         };
 
         let score = compare_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "percollate",
@@ -1889,6 +1948,7 @@ mod tests {
         };
 
         let score = compare_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "trafilatura",
@@ -1930,6 +1990,7 @@ mod tests {
         };
 
         let score = compare_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "dom_smoothie",
@@ -1957,6 +2018,7 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><head><script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@type\":\"Article\",\"url\":\"https://example.com/from-json-ld\",\"headline\":\"JSON-LD headline\"}</script></head><body><article><p>Visible article body.</p></article></body></html>";
         let baseline = preview_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "dom_smoothie",
@@ -1969,6 +2031,7 @@ mod tests {
             },
         )?;
         let candidate = preview_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "dom_smoothie",
@@ -1992,6 +2055,7 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><body><article><div class=\"keep-me drop-me\"><p>Visible article body.</p></div></article></body></html>";
         let baseline = preview_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "dom_smoothie",
@@ -2005,6 +2069,7 @@ mod tests {
             },
         )?;
         let candidate = preview_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "dom_smoothie",
@@ -2042,6 +2107,7 @@ mod tests {
         let mut runner = Runner::with_timeout(
             dir.path().to_path_buf(),
             html.to_string(),
+            ExecutionPolicy::default(),
             std::time::Duration::from_secs(120),
         );
         runner.run_isolated("e2m", "e2m", "https://example.com", &states);
@@ -2066,7 +2132,11 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let html = "<html><body><h1>Shared source</h1><p>Same captured HTML for every converter.</p></body></html>";
         fs::write(directory.path().join("source.html"), html)?;
-        let mut runner = Runner::new(directory.path().to_path_buf(), html.to_string());
+        let mut runner = Runner::new(
+            directory.path().to_path_buf(),
+            html.to_string(),
+            ExecutionPolicy::default(),
+        );
         let states = ExtractorStates::default();
         for key in ["nanohtml2text", "html2md"] {
             runner.run_isolated(key, key, "https://example.com/", &states);
@@ -2096,6 +2166,7 @@ mod tests {
     fn preview_single_extractor_returns_current_output() -> Result<(), Box<dyn std::error::Error>> {
         let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
         let preview = preview_single_extractor_settings(
+            &ExecutionPolicy::default(),
             "https://example.com",
             html,
             "html2text",
@@ -2118,7 +2189,7 @@ mod tests {
     fn resiliparse_excludes_navigation_without_another_acquisition(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let html = include_str!("../fixtures/article-with-navigation.html");
-        let output = run_resiliparse(html)?;
+        let output = run_resiliparse(&ExecutionPolicy::default(), html)?;
         for marker in [
             "CONTENT_SENTINEL_ALPHA",
             "CONTENT_SENTINEL_BETA",
@@ -2143,7 +2214,7 @@ mod tests {
     fn resiliparse_retains_technical_documentation_values() -> Result<(), Box<dyn std::error::Error>>
     {
         let html = include_str!("../fixtures/technical-reference.html");
-        let output = run_resiliparse(html)?;
+        let output = run_resiliparse(&ExecutionPolicy::default(), html)?;
         for value in [
             "CONTENT_SENTINEL_REGISTER_TEXT",
             "CTRL_A",
@@ -2165,7 +2236,7 @@ mod tests {
         let html = format!(
             "<html><head><title>Fixture</title></head><body><article><h1>Article title</h1><p>{body}</p></article><nav>Discard me</nav></body></html>"
         );
-        let result = run_mozilla_readability(&html)?;
+        let result = run_mozilla_readability(&ExecutionPolicy::default(), &html)?;
         assert!(result.contains("Readability operates on one HTML snapshot"));
         assert!(!result.contains("Discard me"));
         Ok(())
@@ -2174,6 +2245,7 @@ mod tests {
     #[test]
     fn build_percollate_args_respects_config() {
         let args = build_percollate_args(
+            &ExecutionPolicy::default(),
             std::path::Path::new("/tmp/input.html"),
             &PercollateConfig {
                 hyphenate: false,
