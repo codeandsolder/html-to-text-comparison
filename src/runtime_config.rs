@@ -16,7 +16,6 @@ pub struct ExecutionPolicy {
     pub max_html_bytes: usize,
     pub max_output_bytes: usize,
     pub browser_timeout_ms: u64,
-    pub node_modules: PathBuf,
     pub extractor_assets: PathBuf,
     pub webclaw_bin: PathBuf,
     pub html_to_markdown_go_bin: PathBuf,
@@ -29,8 +28,6 @@ impl Default for ExecutionPolicy {
             max_output_bytes: DEFAULT_BYTE_LIMIT,
             browser_timeout_ms: 120_000,
             extractor_assets: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/extractors"),
-            node_modules: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tools/extractors/node_modules"),
             webclaw_bin: "webclaw".into(),
             html_to_markdown_go_bin: "html2markdown".into(),
         }
@@ -51,7 +48,6 @@ impl ExecutionPolicy {
             return Err("browser_timeout_ms must be 1,000..=900,000".to_owned());
         }
         for (field, path) in [
-            ("node_modules", &self.node_modules),
             ("extractor_assets", &self.extractor_assets),
             ("webclaw_bin", &self.webclaw_bin),
             ("html_to_markdown_go_bin", &self.html_to_markdown_go_bin),
@@ -192,6 +188,7 @@ mod tests {
             r#"{"execution":{"browser_timeout_ms":999}}"#,
             r#"{"execution":{"webclaw_bin":""}}"#,
             r#"{"execution":{"extractor_assets":""}}"#,
+            r#"{"execution":{"node_modules":"/unrelated/modules"}}"#,
             r#"{"tuner":{"listen":"127.0.0.1:18580","corpus_dir":"/corpus","state_dir":"/state","max_concurrent_previews":0}}"#,
             r#"{"server":{"max_concurrent_runs":65}}"#,
             r#"{"server":{"max_saved_runs":0}}"#,

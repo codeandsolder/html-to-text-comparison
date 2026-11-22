@@ -66,13 +66,15 @@ tool binaries are not mistaken for performance characteristics.
 ## Runtime assets and safety
 
 Execution policy and tuner settings are explicitly loaded from JSON. Example
-production configuration (create config.json alongside the installed binary):
+production configuration (create config.json alongside the installed binary).
+The asset directory contains both scripts and their adjacent npm installation.
+On upgrade, remove the former `execution.node_modules` key and replace the
+asset scripts together with the binary:
 
 ```json
 {
   "execution": {
-    "extractor_assets": "/home/jan/services/html-extraction-tuner/extractors",
-    "node_modules": "/home/jan/services/html-extraction-tuner/extractors/node_modules"
+    "extractor_assets": "/home/jan/services/html-extraction-tuner/extractors"
   },
   "tuner": {
     "listen": "127.0.0.1:18580",

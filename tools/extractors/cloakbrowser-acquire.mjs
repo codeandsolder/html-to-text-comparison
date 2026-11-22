@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { importLocalPackage } from './local-package.mjs';
 
 /**
  * One and only one browser navigation for a page acquisition.
@@ -29,7 +30,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         try {
             // Reserve stdout strictly for the HTML snapshot.
             console.log = (...args) => console.error(...args);
-            const { launch } = await import('cloakbrowser');
+            const { launch } = await importLocalPackage('cloakbrowser');
             const html = await acquireSnapshot(launch, targetUrl);
             process.stdout.write(html);
         } catch (error) {
