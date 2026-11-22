@@ -27,21 +27,21 @@ The Rust converter contract is `Result<String, String>`. A text document beginni
 | node-html-markdown | `node tools/extractors/snapshot-parsers.mjs node-html-markdown` | Local full-document conversion, no fetching |
 | Mozilla Readability | `node -e` with `@mozilla/readability` + `linkedom` | Local HTML file; full upstream JS algorithm, no navigation |
 | webforai | Node module webforai pinned in npm lockfile | Acquired HTML and source URL for local link resolution; no network fetch |
-| Webclaw | `webclaw` or `HTML_TO_TEXT_WEBCLAW_BIN` | Temporary HTML file plus configured CLI arguments |
+| Webclaw | `webclaw` or `execution.webclaw_bin` | Temporary HTML file plus configured CLI arguments |
 | E2M | `uv run --no-project --python 3.12 --with-requirements tools/extractors/python/e2m/requirements.txt` | HTML scratch file, language/engine/processing flags; release-tier integration test |
-| html-to-markdown-go | `html2markdown` or `HTML_TO_MARKDOWN_GO_BIN` | Seekable file attached as stdin to avoid stdout/pipe deadlock; plugin flags |
+| html-to-markdown-go | `html2markdown` or `execution.html_to_markdown_go_bin` | Seekable file attached as stdin to avoid stdout/pipe deadlock; plugin flags |
 
-The worker sets `TMPDIR`/`TMP`/`TEMP` to the parent-owned IPC directory, so child scratch files are removed even if the process group is forcibly terminated. Pinned npm packages live under `tools/extractors/node_modules` or the `HTML_TO_TEXT_NODE_MODULES` override.
+The worker sets `TMPDIR`/`TMP`/`TEMP` to the parent-owned IPC directory, so child scratch files are removed even if the process group is forcibly terminated. Pinned npm packages live under `tools/extractors/node_modules` or the `execution.node_modules` override.
 
 ## Timing and benchmark interpretation
 
 `time_micros` is the conversion-call duration inside the worker, so native Rust library calls and subprocess-launching converters measure different work. `wall_time_micros` is end-to-end parent duration and includes process and IPC overhead. Neither field is a multi-repeat benchmark, memory measurement, or proof of extraction quality. Use fixed HTML snapshots and inspect output content before interpreting speed or reduction.
 
-Web score data and artifacts are held together under the configured server data root. Deleting a score removes its whole artifact directory even if zero extractors ran; retained runs are count-bounded via `HTML_TO_TEXT_MAX_SAVED_RUNS`.
+Web score data and artifacts are held together under the configured server data root. Deleting a score removes its whole artifact directory even if zero extractors ran; retained runs are count-bounded via `server.max_saved_runs`.
 
 
 ## Resource bounds
 
-The parent worker enforces the configured per-extractor deadline and kills the process group on timeout. Individual external converter commands inherit that group; their stdout/stderr are written to bounded temporary files (not read into an unbounded pipe buffer). A configured `HTML_TO_TEXT_MAX_OUTPUT_BYTES` controls the maximum successful output size, default 64 MiB. If the cap is exceeded, the extractor yields a typed failed result and the output file contains a diagnostic instead of a truncated conversion. CLI file inputs and HTTP/browser snapshots separately obey `HTML_TO_TEXT_MAX_HTML_BYTES`.
+The parent worker enforces the configured per-extractor deadline and kills the process group on timeout. Individual external converter commands inherit that group; their stdout/stderr are written to bounded temporary files (not read into an unbounded pipe buffer). A configured `execution.max_output_bytes` controls the maximum successful output size, default 64 MiB. If the cap is exceeded, the extractor yields a typed failed result and the output file contains a diagnostic instead of a truncated conversion. CLI file inputs and HTTP/browser snapshots separately obey `execution.max_html_bytes`.
 
-The server applies the `HTML_TO_TEXT_MAX_CONCURRENT_RUNS` admission cap before acquiring a new page; it also covers previews, variant comparisons, and boilerplate analysis. CLI runs are single-request processes and do not share the server admission counter.
+The server applies the `server.max_concurrent_runs` admission cap before acquiring a new page; it also covers previews, variant comparisons, and boilerplate analysis. CLI runs are single-request processes and do not share the server admission counter.

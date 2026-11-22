@@ -3,8 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path as FilePath, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -20,6 +19,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::extractor_config::{ExtractorConfig, ExtractorState, ExtractorStates};
+use crate::runtime_config::{ExecutionPolicy, TunerConfig};
 use crate::scores;
 
 const MAX_CACHE_ENTRIES: usize = 160;
@@ -94,6 +94,7 @@ struct TunerState {
     profile_path: Arc<PathBuf>,
     cache: Arc<Mutex<ResultCache>>,
     permits: Arc<Semaphore>,
+    policy: Arc<ExecutionPolicy>,
 }
 
 #[derive(Default)]
@@ -258,7 +259,10 @@ fn validate_settings(
     Ok(selected.config)
 }
 
-fn load(root: &FilePath, state_dir: &FilePath) -> Result<TunerState, String> {
+fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, String> {
+    let root = &config.corpus_dir;
+    let state_dir = &config.state_dir;
+    let policy = Arc::new(policy);
     let manifest: Corpus = serde_json::from_slice(
         &fs::read(root.join("manifest.json")).map_err(|error| error.to_string())?,
     )
@@ -276,7 +280,7 @@ fn load(root: &FilePath, state_dir: &FilePath) -> Result<TunerState, String> {
         let expected_file = format!("html/{:03}-{}.html", i + 1, record.capture_id);
         if !is_safe_id(&record.capture_id)
             || record.file != expected_file
-            || record.bytes > MAX_STORY_BYTES
+            || record.bytes > MAX_STORY_BYTES.min(policy.max_html_bytes)
         {
             return Err("Unsafe or oversized corpus entry".into());
         }
@@ -367,7 +371,8 @@ fn load(root: &FilePath, state_dir: &FilePath) -> Result<TunerState, String> {
             profiles: Arc::new(RwLock::new(HashMap::new())),
             profile_path: Arc::new(profile_path.clone()),
             cache: Arc::new(Mutex::new(ResultCache::default())),
-            permits: Arc::new(Semaphore::new(2)),
+            permits: Arc::new(Semaphore::new(config.max_concurrent_previews)),
+            policy: Arc::clone(&policy),
         };
         validate_settings(&state, &engine, &settings)
             .map_err(|(_, error)| format!("Invalid saved profile {engine}: {error}"))?;
@@ -382,7 +387,8 @@ fn load(root: &FilePath, state_dir: &FilePath) -> Result<TunerState, String> {
         profiles: Arc::new(RwLock::new(valid_profiles)),
         profile_path: Arc::new(profile_path),
         cache: Arc::new(Mutex::new(ResultCache::default())),
-        permits: Arc::new(Semaphore::new(3)),
+        permits: Arc::new(Semaphore::new(config.max_concurrent_previews)),
+        policy,
     })
 }
 
@@ -456,9 +462,10 @@ async fn preview_one(
     let id = page.id.clone();
     let extractor = engine.to_owned();
     let started = Instant::now();
+    let policy = Arc::clone(&state.policy);
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        scores::preview_single_extractor_settings(&page_url, &input, &extractor, config)
+        scores::preview_single_extractor_settings(&policy, &page_url, &input, &extractor, config)
     })
     .await
     .map_err(|e| failure(format!("Worker join failed: {e}")))?
@@ -693,15 +700,15 @@ fn build_router(state: TunerState) -> Router {
         .with_state(state)
 }
 
-pub async fn serve(port: u16, root: PathBuf, state_dir: PathBuf) -> Result<(), String> {
-    let state = load(&root, &state_dir)?;
+pub async fn serve(config: TunerConfig, policy: ExecutionPolicy) -> Result<(), String> {
+    let state = load(&config, policy)?;
     tracing::info!(
         sources = state.stories.len(),
         engines = state.engines.len(),
         "Loaded immutable HN settings lab"
     );
     // Always bind loopback; Certifex is the only external HTTPS ingress.
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let address = config.listen;
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .map_err(|e| e.to_string())?;

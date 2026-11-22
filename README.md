@@ -41,28 +41,58 @@ Renovate uses the shared [codeandsolder CI fleet policy](https://github.com/code
 
 The comparison includes **Mozilla's upstream Readability JavaScript implementation** through `@mozilla/readability` + `linkedom`, **Defuddle** in strictly offline mode, **node-html-markdown** as a fast full-document baseline, **Resiliparse** as an independent Lexbor-based main-content plaintext extractor, and **webforai** as a locally run main-content Markdown engine with site adapters. All of these use the same captured bytes as the Rust/Python converters.
 
-CloakBrowser uses its Playwright-compatible Node wrapper and custom Chromium binary. The browser must be activated separately (e.g. `npx cloakbrowser login` or `CLOAKBROWSER_LICENSE_KEY`), and the first launch may download its signed browser build (~200 MB). This activation and download are prerequisites for a live CloakBrowser run, not steps performed by the benchmark. Both browser backends use a configurable process-group deadline, `HTML_TO_TEXT_ACQUIRE_TIMEOUT_MS` (default 120,000 ms). HTTP acquisition is always available without a browser.
+CloakBrowser uses its Playwright-compatible Node wrapper and custom Chromium binary. The browser must be activated separately (e.g. `npx cloakbrowser login` or `CLOAKBROWSER_LICENSE_KEY`), and the first launch may download its signed browser build (~200 MB). This activation and download are prerequisites for a live CloakBrowser run, not steps performed by the benchmark. Both browser backends use a configurable process-group deadline, `execution.browser_timeout_ms` (default 120,000 ms). HTTP acquisition is always available without a browser.
 
-### Web UI and storage
+### Runtime configuration and web UI
 
-```sh
-# Default: local-only, no cross-origin API access
-HTML_TO_TEXT_MAX_SAVED_RUNS=100 cargo run --release -- --server 3000 /path/to/data
-# For a trusted LAN or an authenticated reverse proxy:
-HTML_TO_TEXT_BIND=0.0.0.0 cargo run --release -- --server 3000 /path/to/data
+Prefix either mode with `--config <json-file>`. Omitting it selects the typed
+defaults. A supplied file may omit any field; unknown keys and invalid limits
+fail before acquisition or server startup. For example:
+
+```json
+{
+  "execution": {
+    "max_html_bytes": 67108864,
+    "max_output_bytes": 67108864,
+    "browser_timeout_ms": 120000
+  },
+  "server": {
+    "listen": "127.0.0.1:3000",
+    "data_dir": "/path/to/data",
+    "max_saved_runs": 100,
+    "max_concurrent_runs": 2
+  }
+}
 ```
 
-The web server listens on 127.0.0.1 by default. Use HTML_TO_TEXT_BIND to choose another IPv4/IPv6 interface. The API can acquire arbitrary URLs and run external tools, so do not expose it on an untrusted network without access controls; permissive cross-origin headers are deliberately disabled.
+```sh
+cargo run --release -- --config runtime.json --server
+cargo run --release -- --config runtime.json --extractor nanohtml2text example.html
+```
 
-HTML acquisition has a 45-second total HTTP deadline and a default 64 MiB decoded HTML limit (`HTML_TO_TEXT_MAX_HTML_BYTES`, configurable up to 1 GiB). Browser acquisition uses its own process deadline and the same snapshot-size cap.
+The explicit execution policy is serialized with each isolated worker request,
+so acquisition, native conversion, subprocess capture, previews and comparisons
+all apply the same limits. Optional `execution.node_modules`,
+`execution.webclaw_bin` and `execution.html_to_markdown_go_bin` select external
+tool paths; the default npm path is `tools/extractors/node_modules` in the source
+checkout, while the binaries default to `webclaw` and `html2markdown` via PATH.
+Paths in the file are interpreted relative to the process working directory.
+The CLI retains `out/` as its output directory.
 
-Each extractor has a separate **64 MiB output cap** by default (`HTML_TO_TEXT_MAX_OUTPUT_BYTES`, 1 byte to 1 GiB). Native Rust outputs are checked before writing; external converter stdout and stderr are captured to temporary files, checked *while the command runs*, and discarded if oversized. Limits are errors, never silent truncation. The parent worker process group still enforces the extractor-specific deadline and kills descendants; external converters are not moved to a nested group.
+The web server listens on 127.0.0.1:3000 by default. The API can acquire
+arbitrary URLs and run external tools, so do not expose it on an untrusted
+network without access controls; permissive cross-origin headers are deliberately
+disabled.
 
-The web server permits **2 concurrent expensive jobs** by default (`HTML_TO_TEXT_MAX_CONCURRENT_RUNS`, range 1–64). Acquisition, extraction, preview, setting comparisons and boilerplate sampling all consume a slot; a saturated server returns HTTP **429** immediately instead of growing an unlimited queue. Permits stay owned by blocking jobs even when HTTP callers disconnect. This is an in-process concurrency gate, not cluster-wide resource scheduling.
+HTML acquisition has a 45-second total HTTP deadline and a default 64 MiB decoded HTML limit (`execution.max_html_bytes`, configurable up to 1 GiB). Browser acquisition uses its own process deadline and the same snapshot-size cap.
+
+Each extractor has a separate **64 MiB output cap** by default (`execution.max_output_bytes`, 1 byte to 1 GiB). Native Rust outputs are checked before writing; external converter stdout and stderr are captured to temporary files, checked *while the command runs*, and discarded if oversized. Limits are errors, never silent truncation. The parent worker process group still enforces the extractor-specific deadline and kills descendants; external converters are not moved to a nested group.
+
+The web server permits **2 concurrent expensive jobs** by default (`server.max_concurrent_runs`, range 1–64). Acquisition, extraction, preview, setting comparisons and boilerplate sampling all consume a slot; a saturated server returns HTTP **429** immediately instead of growing an unlimited queue. Permits stay owned by blocking jobs even when HTTP callers disconnect. This is an in-process concurrency gate, not cluster-wide resource scheduling.
 
 The extractor settings file is saved atomically; saved-run metadata changes and pruning are serialized within the server process.
 
-The server stores score metadata under `/path/to/data/scores`, with corresponding HTML snapshots and extractor outputs under `/path/to/data/scores/artifacts/<run-id>/`. The retention cap defaults to 100 saved runs, can be set through `HTML_TO_TEXT_MAX_SAVED_RUNS` (positive integer), and deletes old outputs together with their metadata. Failed/empty runs remain inspectable until deleted or expired. Live previews use ephemeral directories.
+The server stores score metadata under `/path/to/data/scores`, with corresponding HTML snapshots and extractor outputs under `/path/to/data/scores/artifacts/<run-id>/`. The retention cap defaults to 100 saved runs, can be set through `server.max_saved_runs` (positive integer), and deletes old outputs together with their metadata. Failed/empty runs remain inspectable until deleted or expired. Live previews use ephemeral directories.
 
 Every extractor has an independently configurable process deadline (`timeout_ms` in its state, editable in the web UI). Defaults are 10 seconds for native extractors, longer for external tools, and 120 seconds for E2M. A deadline kills the entire worker process group, including spawned tools.
 

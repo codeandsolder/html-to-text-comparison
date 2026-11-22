@@ -3,6 +3,7 @@ mod boilerplate;
 mod extractor_config;
 mod metrics;
 mod runner;
+mod runtime_config;
 mod scores;
 mod tune;
 mod web;
@@ -10,126 +11,141 @@ mod worker;
 
 use extractor_config::ExtractorStates;
 
-use std::path::PathBuf;
-use std::process::exit;
+use runtime_config::RuntimeConfig;
+use std::path::Path;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::args().nth(1).as_deref() == Some("--extract-worker") {
-        return crate::worker::worker_main().map_err(Into::into);
+    let mut args = std::env::args_os();
+    let program = args
+        .next()
+        .unwrap_or_else(|| "html-to-text-comparison".into());
+    let program = program.to_string_lossy();
+    let mut args = args.peekable();
+    if args.peek().is_some_and(|arg| arg == "--extract-worker") {
+        args.next();
+        return crate::worker::worker_main(args).map_err(Into::into);
     }
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() > 1 && args[1] == "--tune-server" {
-        let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(18580);
-        let root = args.get(3).map_or_else(
-            || PathBuf::from("/home/jan/datasets/html-to-text-comparison/hn-top20-20261115"),
-            PathBuf::from,
-        );
-        let state = args.get(4).map_or_else(
-            || PathBuf::from("/home/jan/services/html-extraction-tuner/state"),
-            PathBuf::from,
-        );
-        tune::serve(port, root, state)
-            .await
-            .map_err(std::io::Error::other)?;
-    } else if args.len() > 1 && args[1] == "--server" {
-        let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(3000);
-        let data_dir: PathBuf = args.get(3).map_or_else(|| "data".into(), PathBuf::from);
-        if let Err(e) = web::start_server(port, data_dir).await {
-            eprintln!("Server error: {e}");
-            exit(1);
-        }
-    } else if args.len() > 1 {
-        let CliArgs {
-            extractor,
-            mut method,
-            input,
-            base_url,
-        } = parse_cli_args(&args[1..])?;
-        let current_dir = std::env::current_dir()?;
-        let out_dir = current_dir.join("out");
-
-        let (html, url) = if std::path::Path::new(&input).is_file() {
-            if method != acquisition::Acquisition::Http {
-                return Err("browser acquisition requires an HTTP(S) URL, not a file".into());
-            }
-            method = acquisition::Acquisition::File;
-            let max_bytes = acquisition::max_html_bytes()?;
-            if std::fs::metadata(&input)?.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX) {
-                return Err(format!("input HTML exceeds {max_bytes} byte limit").into());
-            }
-            let html = std::fs::read_to_string(&input)?;
-            let canonical = std::fs::canonicalize(&input)?;
-            let url = match base_url {
-                Some(url) => url,
-                None => url::Url::from_file_path(canonical)
-                    .map_err(|()| std::io::Error::other("Cannot represent input file as URL"))?,
-            };
-            (html, url)
-        } else {
-            if base_url.is_some() {
-                return Err("--base-url only applies to a local HTML snapshot".into());
-            }
-            let url = url::Url::parse(&input)?;
-            let html = method.acquire(&url)?;
-            (html, url)
-        };
-
-        if out_dir.exists() {
-            std::fs::remove_dir_all(&out_dir)?;
-        }
-        std::fs::create_dir_all(&out_dir)?;
-
-        let snapshot_path = out_dir.join("source.html");
-        std::fs::write(&snapshot_path, &html)?;
-        println!("Acquisition: {method:?}, HTML Size (bytes): {}", html.len());
-
-        let mut runner = runner::Runner::new(out_dir, html);
-        let states = ExtractorStates::default();
-        let mut names: Vec<_> = if let Some(extractor) = extractor.as_deref() {
-            let known = states.states.contains_key(extractor);
-            #[cfg(feature = "reader-lm-api")]
-            let known = known || extractor == "reader-lm-api";
-            if !known {
-                return Err(format!("unknown extractor: {extractor}").into());
-            }
-            vec![extractor.to_string()]
-        } else {
-            states.states.keys().cloned().collect()
-        };
-        names.sort();
-        for name in names {
-            runner.run_isolated(&name, &name, url.as_str(), &states);
-        }
-        #[cfg(feature = "reader-lm-api")]
-        if extractor.is_none() {
-            runner.run_isolated("reader-lm-api", "reader-lm-api", url.as_str(), &states);
-        }
-
-        println!("{}", runner.into_table());
-        println!("Remember to check the output files to make sure they have parsed the information you expect!");
+    let config = if args.peek().is_some_and(|arg| arg == "--config") {
+        args.next();
+        let path = args
+            .next()
+            .filter(|path| !path.is_empty() && !path.as_encoded_bytes().starts_with(b"--"))
+            .ok_or("--config requires a path")?;
+        RuntimeConfig::load(Some(Path::new(&path)))?
     } else {
-        eprintln!("Usage:");
-        eprintln!("  {} <url_or_file>     Run all extractors", args[0]);
-        eprintln!(
-            "  {} --extractor <name> [--base-url URL] <url_or_file>     Run one extractor",
-            args[0]
-        );
-        eprintln!("  {} --acquire {{http|lightpanda|cloakbrowser}} [--extractor NAME] <url>  One acquisition", args[0]);
-        eprintln!(
-            "  {} --tune-server [port] [dataset] [state]   Live 2-page HN settings editor",
-            args[0]
-        );
-        eprintln!("  {} --server [port]   Start web server", args[0]);
-        eprintln!();
-        eprintln!("Web server mode: {} --server 3000", args[0]);
+        RuntimeConfig::load(None)?
+    };
+    let arguments = args
+        .map(|arg| {
+            arg.into_string()
+                .map_err(|_| "extraction CLI arguments must be valid UTF-8")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if arguments.first().is_some_and(|arg| arg == "--tune-server") {
+        if arguments.len() != 1 {
+            return Err("--tune-server takes no positional arguments; use --config".into());
+        }
+        let tuner = config
+            .tuner
+            .ok_or("--tune-server requires a tuner configuration")?;
+        tune::serve(tuner, config.execution).await?;
+    } else if arguments.first().is_some_and(|arg| arg == "--server") {
+        if arguments.len() != 1 {
+            return Err("--server takes no positional arguments; use --config".into());
+        }
+        web::start_server(config.server, config.execution).await?;
+    } else if arguments.is_empty() {
+        print_usage(&program);
+    } else {
+        run_cli(&arguments, config.execution)?;
     }
+    Ok(())
+}
+
+fn print_usage(program: &str) {
+    eprintln!("Usage:");
+    eprintln!("  {program} [--config FILE] <url_or_file>     Run all extractors");
+    eprintln!("  {program} [--config FILE] --extractor NAME [--base-url URL] <url_or_file>     Run one extractor");
+    eprintln!("  {program} [--config FILE] --acquire {{http|lightpanda|cloakbrowser}} [--extractor NAME] <url>     One acquisition");
+    eprintln!("  {program} [--config FILE] --server     Start web server");
+    eprintln!("  {program} --config FILE --tune-server     Start settings tuner");
+}
+
+fn run_cli(
+    arguments: &[String],
+    policy: runtime_config::ExecutionPolicy,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let CliArgs {
+        extractor,
+        mut method,
+        input,
+        base_url,
+    } = parse_cli_args(arguments)?;
+    let states = ExtractorStates::default();
+    let mut names: Vec<_> = if let Some(extractor) = extractor.as_deref() {
+        let known = states.states.contains_key(extractor);
+        #[cfg(feature = "reader-lm-api")]
+        let known = known || extractor == "reader-lm-api";
+        if !known {
+            return Err(format!("unknown extractor: {extractor}").into());
+        }
+        vec![extractor.to_string()]
+    } else {
+        states.states.keys().cloned().collect()
+    };
+    names.sort();
+    let current_dir = std::env::current_dir()?;
+    let out_dir = current_dir.join("out");
+
+    let (html, url) = if std::path::Path::new(&input).is_file() {
+        if method != acquisition::Acquisition::Http {
+            return Err("browser acquisition requires an HTTP(S) URL, not a file".into());
+        }
+        method = acquisition::Acquisition::File;
+        let html = acquisition::read_html_file(Path::new(&input), policy.max_html_bytes)?;
+        let canonical = std::fs::canonicalize(&input)?;
+        let url = match base_url {
+            Some(url) => url,
+            None => url::Url::from_file_path(canonical)
+                .map_err(|()| std::io::Error::other("Cannot represent input file as URL"))?,
+        };
+        (html, url)
+    } else {
+        if base_url.is_some() {
+            return Err("--base-url only applies to a local HTML snapshot".into());
+        }
+        let url = url::Url::parse(&input)?;
+        let html = method.acquire(&url, &policy)?;
+        (html, url)
+    };
+
+    if out_dir.exists() {
+        std::fs::remove_dir_all(&out_dir)?;
+    }
+    std::fs::create_dir_all(&out_dir)?;
+
+    let snapshot_path = out_dir.join("source.html");
+    std::fs::write(&snapshot_path, &html)?;
+    println!("Acquisition: {method:?}, HTML Size (bytes): {}", html.len());
+
+    let mut runner = runner::Runner::new(out_dir, html, policy);
+    for name in names {
+        runner.run_isolated(&name, &name, url.as_str(), &states);
+    }
+    #[cfg(feature = "reader-lm-api")]
+    if extractor.is_none() {
+        runner.run_isolated("reader-lm-api", "reader-lm-api", url.as_str(), &states);
+    }
+
+    println!("{}", runner.into_table());
+    println!("Remember to check the output files to make sure they have parsed the information you expect!");
     Ok(())
 }
 

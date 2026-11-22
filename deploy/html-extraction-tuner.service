@@ -9,9 +9,8 @@ Type=simple
 User=jan
 Group=jan
 WorkingDirectory=/home/jan/services/html-extraction-tuner
-ExecStart=/home/jan/services/html-extraction-tuner/bin/html-to-text-comparison --tune-server 18580 /home/jan/datasets/html-to-text-comparison/hn-top20-20261115 /home/jan/services/html-extraction-tuner/state
+ExecStart=/home/jan/services/html-extraction-tuner/bin/html-to-text-comparison --config /home/jan/services/html-extraction-tuner/config.json --tune-server
 Environment=PATH=/home/jan/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin
-Environment=HTML_TO_TEXT_EXTRACTOR_ROOT=/home/jan/services/html-extraction-tuner/extractors
 Environment=TMPDIR=/home/jan/services/html-extraction-tuner/tmp
 Environment=RUST_LOG=html_to_text_comparison=info
 Restart=on-failure

@@ -16,14 +16,14 @@ permissions:
 jobs:
   rust:
     name: Rust 1.99.1 (shared sccache)
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@39f1e45632ec74fa43ef9976962c26f692c22b6e # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@9190509a6314e35770f27b70dc771d14227e95aa # main
     with:
       rust-toolchain: "1.99.1"
       timeout-minutes: 45
       command: |
         # Bootstrap the pinned uv wheel into runner-local ephemeral tooling.
         python3 -m venv "$RUNNER_TEMP/uv-bootstrap"
-        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.8"
+        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.9"
         export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
         PUPPETEER_SKIP_DOWNLOAD=1 npm ci --prefix tools/extractors --ignore-scripts --no-audit --no-fund
         npm test --prefix tools/extractors
@@ -39,7 +39,7 @@ jobs:
 
   e2m-integration:
     name: E2M heavyweight integration (release tier)
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@39f1e45632ec74fa43ef9976962c26f692c22b6e # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@9190509a6314e35770f27b70dc771d14227e95aa # main
     with:
       validation-tier: "release"
       rust-toolchain: "1.99.1"
@@ -47,7 +47,7 @@ jobs:
       command: |
         # Bootstrap the pinned uv wheel into runner-local ephemeral tooling.
         python3 -m venv "$RUNNER_TEMP/uv-bootstrap"
-        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.8"
+        "$RUNNER_TEMP/uv-bootstrap/bin/python" -m pip install --disable-pip-version-check --no-input "uv==0.13.9"
         export PATH="$RUNNER_TEMP/uv-bootstrap/bin:$PATH"
         uv run --no-project --python 3.12 --with-requirements tools/extractors/python/e2m/requirements.txt -- python3 -c 'from wisup_e2m import HtmlParser'
         # Worker tests spawn the real binary, not a Rust test harness.

@@ -2,7 +2,7 @@
 
 Run the standalone tuning mode from the existing Rust main executable:
 
-    html-to-text-comparison --tune-server 18580 /home/jan/datasets/html-to-text-comparison/hn-top20-20261115 /home/jan/services/html-extraction-tuner/state
+    html-to-text-comparison --config /home/jan/services/html-extraction-tuner/config.json --tune-server
 
 The service listens on loopback TCP only. The Certifex ingress service
 extract-tune = 18580 publishes https://extract-tune.onhir.eu to the Tailscale
@@ -65,11 +65,26 @@ tool binaries are not mistaken for performance characteristics.
 
 ## Runtime assets and safety
 
-Runtime asset files are loaded from HTML_TO_TEXT_EXTRACTOR_ROOT
-(defaulting to the checkout's tools/extractors). Production points this to
-/home/jan/services/html-extraction-tuner/extractors, which contains the exact
-Node adapter script, pinned node_modules and uv requirements. Webclaw and the
-Go binary are installed via stable user PATH links.
+Execution policy and tuner settings are explicitly loaded from JSON. Example
+production configuration (create config.json alongside the installed binary):
+
+```json
+{
+  "execution": {
+    "extractor_assets": "/home/jan/services/html-extraction-tuner/extractors",
+    "node_modules": "/home/jan/services/html-extraction-tuner/extractors/node_modules"
+  },
+  "tuner": {
+    "listen": "127.0.0.1:18580",
+    "corpus_dir": "/home/jan/datasets/html-to-text-comparison/hn-top20-20261115",
+    "state_dir": "/home/jan/services/html-extraction-tuner/state",
+    "max_concurrent_previews": 3
+  }
+}
+```
+
+The asset directory contains the Node adapter script and uv requirements.
+Webclaw and the Go binary are installed via stable user PATH links.
 
 The tuner uses the existing isolated worker process group, caps output,
 enforces backend-specific timeouts, and owns all temporary files under the

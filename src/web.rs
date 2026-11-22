@@ -1,5 +1,6 @@
 use crate::boilerplate;
 use crate::extractor_config::{ExtractorState, ExtractorStates};
+use crate::runtime_config::{ExecutionPolicy, ServerConfig};
 use crate::scores::ScoreStore;
 use axum::{
     extract::{Path, State},
@@ -8,7 +9,6 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
-use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
@@ -16,29 +16,27 @@ use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 #[derive(Clone)]
 struct AppState {
     score_store: ScoreStore,
+    policy: Arc<ExecutionPolicy>,
     extractor_states: Arc<RwLock<ExtractorStates>>,
     states_path: PathBuf,
     jobs: Arc<Semaphore>,
 }
 
-pub async fn start_server(port: u16, data_dir: PathBuf) -> Result<(), String> {
-    let states_path = data_dir.join("extractor_states.json");
-    let scores_path = data_dir.join("scores");
+pub async fn start_server(config: ServerConfig, policy: ExecutionPolicy) -> Result<(), String> {
+    let states_path = config.data_dir.join("extractor_states.json");
+    let scores_path = config.data_dir.join("scores");
 
-    let max_saved_runs = std::env::var("HTML_TO_TEXT_MAX_SAVED_RUNS")
-        .unwrap_or_else(|_| "100".to_string())
-        .parse::<usize>()
-        .map_err(|error| format!("invalid HTML_TO_TEXT_MAX_SAVED_RUNS: {error}"))?;
-    let score_store = ScoreStore::with_retention(scores_path, max_saved_runs)?;
+    let score_store = ScoreStore::with_retention(scores_path, config.max_saved_runs)?;
     // On restart, reap metadata records above the limit before accepting traffic.
     score_store.prune()?;
     let extractor_states = ExtractorStates::load(&states_path);
 
     let state = AppState {
         score_store,
+        policy: Arc::new(policy),
         extractor_states: Arc::new(RwLock::new(extractor_states)),
         states_path,
-        jobs: Arc::new(Semaphore::new(max_concurrent_jobs()?)),
+        jobs: Arc::new(Semaphore::new(config.max_concurrent_runs)),
     };
 
     let app = Router::new()
@@ -58,20 +56,12 @@ pub async fn start_server(port: u16, data_dir: PathBuf) -> Result<(), String> {
         .route("/states", get(get_all_states))
         .with_state(state);
 
-    let bind = std::env::var("HTML_TO_TEXT_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let addr = parse_listen_addr(&bind, port)?;
+    let addr = config.listen;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| e.to_string())?;
     tracing::info!("Server running on http://{}", addr);
     axum::serve(listener, app).await.map_err(|e| e.to_string())
-}
-
-fn parse_listen_addr(ip: &str, port: u16) -> Result<SocketAddr, String> {
-    let ip = ip
-        .parse::<IpAddr>()
-        .map_err(|error| format!("invalid HTML_TO_TEXT_BIND address: {error}"))?;
-    Ok(SocketAddr::new(ip, port))
 }
 
 /// Extraction, external tools and boilerplate sampling are blocking
@@ -82,23 +72,6 @@ async fn run_blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|error| format!("blocking job failed: {error}"))?
-}
-
-fn max_concurrent_jobs() -> Result<usize, String> {
-    const DEFAULT: usize = 2;
-    const MAXIMUM: usize = 64;
-    let configured =
-        std::env::var("HTML_TO_TEXT_MAX_CONCURRENT_RUNS").map_or(Ok(DEFAULT), |value| {
-            value
-                .parse::<usize>()
-                .map_err(|error| format!("invalid HTML_TO_TEXT_MAX_CONCURRENT_RUNS: {error}"))
-        })?;
-    if !(1..=MAXIMUM).contains(&configured) {
-        return Err(format!(
-            "HTML_TO_TEXT_MAX_CONCURRENT_RUNS must be 1..={MAXIMUM}"
-        ));
-    }
-    Ok(configured)
 }
 
 /// Fail fast rather than queueing hundreds of long-running browser/LLM jobs.
@@ -144,16 +117,25 @@ async fn run_extraction(
         Ok(admission) => admission,
         Err(code) => return (code, "all extraction slots are busy").into_response(),
     };
-    let html = match fetch_html(&payload.url, payload.acquisition, Arc::clone(&admission)).await {
+    let html = match fetch_html(
+        &payload.url,
+        payload.acquisition,
+        Arc::clone(&state.policy),
+        Arc::clone(&admission),
+    )
+    .await
+    {
         Ok(h) => h,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
 
     let states = state.extractor_states.read().await.clone();
     let repository = state.score_store.clone();
+    let policy = Arc::clone(&state.policy);
     let score = run_blocking(move || {
         let _admission = admission;
         crate::scores::run_extraction(
+            &policy,
             &payload.url,
             &html,
             payload.acquisition,
@@ -184,7 +166,14 @@ async fn run_single_extraction(
         Ok(admission) => admission,
         Err(code) => return (code, "all extraction slots are busy").into_response(),
     };
-    let html = match fetch_html(&payload.url, payload.acquisition, Arc::clone(&admission)).await {
+    let html = match fetch_html(
+        &payload.url,
+        payload.acquisition,
+        Arc::clone(&state.policy),
+        Arc::clone(&admission),
+    )
+    .await
+    {
         Ok(h) => h,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
@@ -201,9 +190,11 @@ async fn run_single_extraction(
         }
     }
     let repository = state.score_store.clone();
+    let policy = Arc::clone(&state.policy);
     let score = run_blocking(move || {
         let _admission = admission;
         crate::scores::run_extraction(
+            &policy,
             &payload.url,
             &html,
             payload.acquisition,
@@ -231,7 +222,7 @@ async fn compare_settings(
         Ok(admission) => admission,
         Err(code) => return (code, "all extraction slots are busy").into_response(),
     };
-    let html = match load_score_source_html(&base_score, &state.score_store) {
+    let html = match load_score_source_html(&base_score, &state.score_store, &state.policy) {
         Ok(content) => content,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
@@ -257,9 +248,11 @@ async fn compare_settings(
     };
 
     let repository = state.score_store.clone();
+    let policy = Arc::clone(&state.policy);
     let score = run_blocking(move || {
         let _admission = admission;
         crate::scores::compare_single_extractor_settings(
+            &policy,
             &base_score.url,
             &html,
             &payload.extractor,
@@ -288,7 +281,7 @@ async fn preview_settings(
         Ok(admission) => admission,
         Err(code) => return (code, "all extraction slots are busy").into_response(),
     };
-    let html = match load_score_source_html(&base_score, &state.score_store) {
+    let html = match load_score_source_html(&base_score, &state.score_store, &state.policy) {
         Ok(content) => content,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
@@ -313,9 +306,11 @@ async fn preview_settings(
         baseline_config
     };
 
+    let policy = Arc::clone(&state.policy);
     let preview = run_blocking(move || {
         let _admission = admission;
         crate::scores::preview_single_extractor_settings(
+            &policy,
             &base_score.url,
             &html,
             &payload.extractor,
@@ -342,15 +337,17 @@ async fn run_boilerplate_diff(
         Ok(admission) => admission,
         Err(code) => return (code, "all extraction slots are busy").into_response(),
     };
-    let html = match load_score_source_html(&base_score, &state.score_store) {
+    let html = match load_score_source_html(&base_score, &state.score_store, &state.policy) {
         Ok(content) => content,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
 
     let states = state.extractor_states.read().await.clone();
+    let policy = Arc::clone(&state.policy);
     let result = run_blocking(move || {
         let _admission = admission;
         boilerplate::analyze_boilerplate_diff(
+            &policy,
             &base_score.url,
             &html,
             &states,
@@ -547,12 +544,13 @@ async fn get_output(
 async fn fetch_html(
     url: &str,
     acquisition: crate::acquisition::Acquisition,
+    policy: Arc<ExecutionPolicy>,
     admission: Arc<OwnedSemaphorePermit>,
 ) -> Result<String, String> {
     let parsed = url::Url::parse(url).map_err(|error| error.to_string())?;
     tokio::task::spawn_blocking(move || {
         let _admission = admission;
-        acquisition.acquire(&parsed)
+        acquisition.acquire(&parsed, &policy)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -561,9 +559,10 @@ async fn fetch_html(
 fn load_score_source_html(
     score: &crate::scores::Score,
     repository: &ScoreStore,
+    policy: &ExecutionPolicy,
 ) -> Result<String, String> {
     let path = repository.source_path(&score.id)?;
-    std::fs::read_to_string(path)
+    crate::acquisition::read_html_file(&path, policy.max_html_bytes)
         .map_err(|error| format!("saved HTML for run {} is unavailable: {error}", score.id))
 }
 
@@ -600,19 +599,6 @@ static HTML: &str = include_str!("web_ui.html");
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn server_bind_address_is_explicit_and_supports_ipv6() {
-        assert_eq!(
-            parse_listen_addr("127.0.0.1", 3000).map(|addr| addr.to_string()),
-            Ok("127.0.0.1:3000".to_string())
-        );
-        assert_eq!(
-            parse_listen_addr("::1", 8080).map(|addr| addr.to_string()),
-            Ok("[::1]:8080".to_string())
-        );
-        assert!(parse_listen_addr("not an IP", 3000).is_err());
-    }
 
     #[test]
     fn apply_extractor_config_accepts_nested_payloads() {
@@ -691,6 +677,7 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let state = AppState {
             score_store: ScoreStore::with_retention(temp.path().join("scores"), 8)?,
+            policy: Arc::new(ExecutionPolicy::default()),
             extractor_states: Arc::new(RwLock::new(ExtractorStates::default())),
             states_path: temp.path().join("extractor_states.json"),
             jobs: Arc::new(Semaphore::new(1)),
@@ -726,6 +713,7 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let state = AppState {
             score_store: ScoreStore::with_retention(temp.path().join("scores"), 8)?,
+            policy: Arc::new(ExecutionPolicy::default()),
             extractor_states: Arc::new(RwLock::new(ExtractorStates::default())),
             states_path: temp.path().join("extractor_states.json"),
             jobs: Arc::new(Semaphore::new(1)),
@@ -749,6 +737,7 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let state = AppState {
             score_store: ScoreStore::with_retention(temp.path().join("scores"), 8)?,
+            policy: Arc::new(ExecutionPolicy::default()),
             extractor_states: Arc::new(RwLock::new(ExtractorStates::default())),
             states_path: temp.path().join("extractor_states.json"),
             jobs: Arc::new(Semaphore::new(1)),
