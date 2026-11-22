@@ -2405,9 +2405,11 @@ print('isolated')
             snapshot_js_bin: assets.path().join("not-an-installed-runtime"),
             ..Default::default()
         };
-        let error = run_turndown(&policy, "<p>snapshot</p>", &TurndownConfig::default(), &[])
-            .expect_err("an unavailable selected runtime must fail, not fall back to Node");
-        assert!(!error.is_empty());
+        let result = run_turndown(&policy, "<p>snapshot</p>", &TurndownConfig::default(), &[]);
+        assert!(
+            matches!(result, Err(ref error) if error.contains("turndown launch failed")),
+            "{result:?}"
+        );
         Ok(())
     }
 
