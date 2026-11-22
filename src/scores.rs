@@ -751,34 +751,41 @@ pub fn run_cli_extractor(
                 .map_or_default(|s| s.config.html_to_markdown_go.clone()),
         ),
         #[cfg(feature = "reader-lm-api")]
-        "reader-lm-api" => {
-            let key = std::env::var("JINA_API_KEY")
-                .map_err(|error| format!("reader-lm-api missing API key: {error}"))?;
-            // Jina accepts the acquired HTML. The original URL is only a
-            // base for relative links; sending it alone would re-fetch the site.
-            let response = ureq::post("https://r.jina.ai/")
-                .header("authorization", &format!("Bearer {key}"))
-                .send_json(serde_json::json!({
-                    "html": html,
-                    "url": parsed_url.as_str()
-                }))
-                .map_err(|error| format!("reader-lm-api request failed: {error}"))?;
-            let limit = policy.max_output_bytes;
-            let mut body = Vec::new();
-            response
-                .into_body()
-                .into_reader()
-                .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
-                .read_to_end(&mut body)
-                .map_err(|error| format!("reader-lm-api read failed: {error}"))?;
-            if body.len() > limit {
-                return Err(format!("reader-lm-api output exceeds {limit} byte limit"));
-            }
-            String::from_utf8(body)
-                .map_err(|error| format!("reader-lm-api returned invalid UTF-8: {error}"))
-        }
+        "reader-lm-api" => run_reader_lm(policy, html, parsed_url),
         _ => Err(format!("unknown extractor: {extractor_key}")),
     }
+}
+
+#[cfg(feature = "reader-lm-api")]
+fn run_reader_lm(
+    policy: &ExecutionPolicy,
+    html: &str,
+    parsed_url: &url::Url,
+) -> Result<String, String> {
+    let key = std::env::var("JINA_API_KEY")
+        .map_err(|error| format!("reader-lm-api missing API key: {error}"))?;
+    // Jina accepts the acquired HTML. The original URL is only a
+    // base for relative links; sending it alone would re-fetch the site.
+    let response = ureq::post("https://r.jina.ai/")
+        .header("authorization", &format!("Bearer {key}"))
+        .send_json(serde_json::json!({
+            "html": html,
+            "url": parsed_url.as_str()
+        }))
+        .map_err(|error| format!("reader-lm-api request failed: {error}"))?;
+    let limit = policy.max_output_bytes;
+    let mut body = Vec::new();
+    response
+        .into_body()
+        .into_reader()
+        .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut body)
+        .map_err(|error| format!("reader-lm-api read failed: {error}"))?;
+    if body.len() > limit {
+        return Err(format!("reader-lm-api output exceeds {limit} byte limit"));
+    }
+    String::from_utf8(body)
+        .map_err(|error| format!("reader-lm-api returned invalid UTF-8: {error}"))
 }
 
 // Keep external converter descendants in their isolated worker's process

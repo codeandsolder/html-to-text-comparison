@@ -410,7 +410,7 @@ fn extractor_config_payload<'a>(config: &'a serde_json::Value, key: &str) -> &'a
     config.get(key).unwrap_or(config)
 }
 
-pub(crate) fn apply_extractor_config(
+pub fn apply_extractor_config(
     name: &str,
     config: &serde_json::Value,
     state: &mut ExtractorState,
@@ -437,7 +437,12 @@ pub(crate) fn apply_extractor_config(
         "resiliparse" => {
             set_typed!(resiliparse, "resiliparse");
             if !matches!(
-                state.config.resiliparse.formatting_mode.as_str(),
+                state
+                    .config
+                    .resiliparse
+                    .presentation
+                    .formatting_mode
+                    .as_str(),
                 "plain" | "formatted" | "minimal_html"
             ) {
                 return Err(

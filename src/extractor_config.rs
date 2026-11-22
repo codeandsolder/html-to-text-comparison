@@ -504,38 +504,77 @@ pub struct Html2MdConfig {
     pub preserve_spans: bool,
 }
 
+/// Select which document regions contribute to the extraction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ResiliparseConfig {
+pub struct ResiliparseRegions {
     pub main_content: bool,
-    pub formatting_mode: String,
-    pub list_bullets: bool,
-    pub alt_texts: bool,
-    pub links: bool,
-    pub form_fields: bool,
     pub noscript: bool,
-    pub comments: bool,
-    pub post_meta: bool,
     pub hidden_elements: bool,
     pub skip_elements: Vec<String>,
 }
 
-impl Default for ResiliparseConfig {
+impl Default for ResiliparseRegions {
     fn default() -> Self {
         Self {
             main_content: true,
-            formatting_mode: "formatted".into(),
-            list_bullets: true,
-            alt_texts: true,
-            links: false,
-            form_fields: false,
             noscript: false,
-            comments: true,
-            post_meta: true,
             hidden_elements: false,
             skip_elements: Vec::new(),
         }
     }
+}
+
+/// Select annotations and auxiliary document content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResiliparseAnnotations {
+    pub alt_texts: bool,
+    pub comments: bool,
+    pub post_meta: bool,
+}
+
+impl Default for ResiliparseAnnotations {
+    fn default() -> Self {
+        Self {
+            alt_texts: true,
+            comments: true,
+            post_meta: true,
+        }
+    }
+}
+
+/// Control how structural and interactive elements are rendered.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResiliparsePresentation {
+    pub formatting_mode: String,
+    pub list_bullets: bool,
+    pub links: bool,
+    pub form_fields: bool,
+}
+
+impl Default for ResiliparsePresentation {
+    fn default() -> Self {
+        Self {
+            formatting_mode: "formatted".into(),
+            list_bullets: true,
+            links: false,
+            form_fields: false,
+        }
+    }
+}
+
+/// The Python backend accepts these independent groups as flat keyword arguments.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ResiliparseConfig {
+    #[serde(flatten)]
+    pub regions: ResiliparseRegions,
+    #[serde(flatten)]
+    pub annotations: ResiliparseAnnotations,
+    #[serde(flatten)]
+    pub presentation: ResiliparsePresentation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

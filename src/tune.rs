@@ -3,9 +3,10 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST, ORIGIN};
@@ -246,7 +247,7 @@ fn validate_settings(
         || selected.config.dom_smoothie.char_threshold > 1_000_000
         || selected.config.mozilla_readability.nb_top_candidates > 1000
         || selected.config.mozilla_readability.char_threshold > 1_000_000
-        || selected.config.resiliparse.skip_elements.len() > 64
+        || selected.config.resiliparse.regions.skip_elements.len() > 64
         || selected.config.html2text.max_wrap_width > 32_000
         || selected.config.html2text.min_wrap_width > 32_000
         || selected.config.node_html_markdown.max_consecutive_newlines > 100
@@ -309,6 +310,47 @@ fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, Str
         });
     }
 
+    let (engines, baseline, names) = load_baselines(root, shortlist, &stories, &policy)?;
+    fs::create_dir_all(state_dir).map_err(|e| e.to_string())?;
+    let profile_path = state_dir.join("profiles.json");
+    let stored: HashMap<String, Value> = if profile_path.is_file() {
+        serde_json::from_slice(&fs::read(&profile_path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Cannot read saved profiles: {e}"))?
+    } else {
+        HashMap::new()
+    };
+    let mut valid_profiles = HashMap::new();
+    // Ignore retired engines but reject invalid current profile data on startup.
+    for (engine, settings) in stored {
+        if !engines.contains_key(&engine) {
+            continue;
+        }
+        validate_settings(&engines, &engine, &settings)
+            .map_err(|(_, error)| format!("Invalid saved profile {engine}: {error}"))?;
+        valid_profiles.insert(engine, settings);
+    }
+    Ok(TunerState {
+        stories: Arc::new(stories),
+        indices: Arc::new(indices),
+        engines: Arc::new(engines),
+        names: Arc::new(names),
+        baseline: Arc::new(baseline),
+        profiles: Arc::new(RwLock::new(valid_profiles)),
+        profile_path: Arc::new(profile_path),
+        cache: Arc::new(Mutex::new(ResultCache::default())),
+        permits: Arc::new(Semaphore::new(config.max_concurrent_previews)),
+        policy,
+    })
+}
+
+type BaselineOutputs = HashMap<(String, String), Arc<str>>;
+
+fn load_baselines(
+    root: &std::path::Path,
+    shortlist: Shortlist,
+    stories: &[Story],
+    policy: &ExecutionPolicy,
+) -> Result<(HashMap<String, EngineInfo>, BaselineOutputs, Vec<String>), String> {
     let registry = ExtractorStates::default();
     let mut engines = HashMap::new();
     let mut baseline = HashMap::new();
@@ -340,48 +382,19 @@ fn load(config: &TunerConfig, policy: ExecutionPolicy) -> Result<TunerState, Str
         } else {
             "full-20261115"
         };
-        for story in &stories {
+        for story in stories {
             let path = root
                 .join("bench")
                 .join(output_set)
                 .join("outputs")
                 .join(name)
                 .join(format!("{}.txt", story.id));
-            let output = fs::read_to_string(&path)
+            let output = crate::acquisition::read_html_file(&path, policy.max_output_bytes)
                 .map_err(|e| format!("Missing immutable baseline {}: {e}", path.display()))?;
             baseline.insert((story.id.clone(), name.clone()), Arc::from(output));
         }
     }
-    fs::create_dir_all(state_dir).map_err(|e| e.to_string())?;
-    let profile_path = state_dir.join("profiles.json");
-    let stored: HashMap<String, Value> = if profile_path.is_file() {
-        serde_json::from_slice(&fs::read(&profile_path).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("Cannot read saved profiles: {e}"))?
-    } else {
-        HashMap::new()
-    };
-    let mut valid_profiles = HashMap::new();
-    // Ignore retired engines but reject invalid current profile data on startup.
-    for (engine, settings) in stored {
-        if !engines.contains_key(&engine) {
-            continue;
-        }
-        validate_settings(&engines, &engine, &settings)
-            .map_err(|(_, error)| format!("Invalid saved profile {engine}: {error}"))?;
-        valid_profiles.insert(engine, settings);
-    }
-    Ok(TunerState {
-        stories: Arc::new(stories),
-        indices: Arc::new(indices),
-        engines: Arc::new(engines),
-        names: Arc::new(names),
-        baseline: Arc::new(baseline),
-        profiles: Arc::new(RwLock::new(valid_profiles)),
-        profile_path: Arc::new(profile_path),
-        cache: Arc::new(Mutex::new(ResultCache::default())),
-        permits: Arc::new(Semaphore::new(config.max_concurrent_previews)),
-        policy,
-    })
+    Ok((engines, baseline, names))
 }
 
 fn clip(text: String) -> (String, bool) {
@@ -434,9 +447,10 @@ async fn preview_one(
     if settings == &info.defaults && !force {
         return baseline_view(state, page, engine);
     }
-    let cache_key = format!("{}:{}:{}", page.id, engine, settings);
+    let cache_key = format!("{}:{engine}:{settings}", page.id);
     if !force {
-        if let Some(mut hit) = state.cache.lock().await.get(&cache_key) {
+        let cached = state.cache.lock().await.get(&cache_key);
+        if let Some(mut hit) = cached {
             hit.from_cache = true;
             return Ok(hit);
         }
@@ -462,8 +476,8 @@ async fn preview_one(
     .await
     .map_err(|e| failure(format!("Worker join failed: {e}")))?
     .map_err(failure)?;
-    let worker_ms = result.wall_time_micros as f64 / 1000.0;
-    let conversion_ms = result.time_micros as f64 / 1000.0;
+    let worker_ms = Duration::from_micros(result.wall_time_micros).as_secs_f64() * 1000.0;
+    let conversion_ms = Duration::from_micros(result.time_micros).as_secs_f64() * 1000.0;
     let size = result.output.len();
     let status = match result.status {
         crate::runner::ExtractionStatus::Success => "success",
@@ -634,10 +648,10 @@ async fn save(
         .ok_or_else(|| failure("Profile path has no directory"))?;
     let serialized = serde_json::to_vec_pretty(&next).map_err(failure)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(failure)?;
-    use std::io::Write as _;
     temporary.write_all(&serialized).map_err(failure)?;
     temporary.persist(path).map_err(failure)?;
     *profiles = next;
+    drop(profiles);
     Ok(Json(json!({"saved": true, "engine": req.engine})))
 }
 
