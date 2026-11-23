@@ -15,6 +15,6 @@ permissions:
 
 jobs:
   strict-rust:
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@1f3c1fab9972ecc4c85329c9651dfbed138e6736 # main
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@8b83337077bd32ff0314ef0b902adc561d759abc # main
     with:
       cargo-args: "--locked --all-targets --all-features"

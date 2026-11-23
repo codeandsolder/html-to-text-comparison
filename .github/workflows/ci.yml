@@ -16,7 +16,7 @@ permissions:
 jobs:
   rust:
     name: Rust
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@70f0980cdaeae5520a70c059081a3b0427e9d380 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@2026b5834874b771fd080467d0b4f0074bc3971e # main
     with:
       timeout-minutes: 45
       uv-version: "0.13.9"
@@ -53,7 +53,7 @@ jobs:
 
   e2m-integration:
     name: E2M heavyweight integration (release tier)
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@70f0980cdaeae5520a70c059081a3b0427e9d380 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@2026b5834874b771fd080467d0b4f0074bc3971e # main
     with:
       validation-tier: "release"
       timeout-minutes: 45
