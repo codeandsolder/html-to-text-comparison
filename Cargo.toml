@@ -70,3 +70,6 @@ boilerpipe = ["dep:boilerpipe"]
 august = ["dep:august"]
 fast_html2md = ["dep:fast_html2md"]
 reader-lm-api = []
+
+[patch.crates-io]
+zlib-rs = { git = "https://github.com/codeandsolder/zlib-rs-fast.git", rev = "3ffe503ac2261d625a1fa9a78999fedeb0cdfc92" }
