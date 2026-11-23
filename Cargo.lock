@@ -1686,9 +1686,9 @@ dependencies = [
 
 [[package]]
 name = "mdream"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5424a4181fc304424e4428181e874870481aef02ce685a0221cf51c4213d9d0a"
+checksum = "38ba7b3dfa590977a9f555b45dde68d2bacb95a58c00bf6fa76ae48f777ce049"
 
 [[package]]
 name = "memchr"
