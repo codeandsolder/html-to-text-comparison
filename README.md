@@ -74,9 +74,9 @@ The explicit execution policy is serialized with each isolated worker request,
 so acquisition, native conversion, subprocess capture, previews and comparisons
 all apply the same limits. The five pure snapshot JavaScript adapters may use an explicitly selected
 `execution.snapshot_js_bin` (default `node`). See [the Zipp experiment](tools/zipp/README.md)
-for the temporary source patch and compatibility limits. Browser acquisition
-and Percollate retain Node; the Python adapters retain their pinned CPython/uv
-environments until the corresponding Zipp standard-library support exists.
+for the pinned official v0.0.38 native release, parity tests and benchmarks.
+Browser acquisition and Percollate retain Node. The Python reference adapters
+retain their explicitly provisioned PyPy/CPython environments inside bubblewrap.
 
 Optional `execution.extractor_assets`, `execution.webclaw_bin` and
 `execution.html_to_markdown_go_bin` select external tool paths. The asset root
