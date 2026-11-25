@@ -6,7 +6,7 @@
   "dependencies": {
     "@mozilla/readability": "0.6.0",
     "cloakbrowser": "0.7.2",
-    "defuddle": "0.19.6",
+    "defuddle": "0.19.13",
     "linkedom": "0.18.15",
     "node-html-markdown": "2.0.0",
     "percollate": "4.3.0",
