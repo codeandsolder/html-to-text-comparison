@@ -192,19 +192,16 @@ fn is_safe_id(value: &str) -> bool {
 fn config_group(state: &ExtractorState, name: &str) -> Value {
     let cfg = &state.config;
     match name {
-        "html2text" => json!(cfg.html2text),
         "htmd" => json!(cfg.htmd),
         "mdka" => json!(cfg.mdka),
         "readable-readability" => json!(cfg.readable_readability),
         "dom_smoothie" => json!(cfg.dom_smoothie),
         "turndown" => json!(cfg.turndown),
         "mdream" => json!(cfg.mdream),
-        "html2text-py" => json!(cfg.html2text_py),
         "markdownify" => json!(cfg.markdownify),
         "webclaw" => json!(cfg.webclaw),
         "html-to-markdown-go" => json!(cfg.html_to_markdown_go),
         "fast_html2md" => json!(cfg.fast_html2md),
-        "html2md" => json!(cfg.html2md),
         "resiliparse" => json!(cfg.resiliparse),
         "mozilla-readability" => json!(cfg.mozilla_readability),
         "node-html-markdown" => json!(cfg.node_html_markdown),
@@ -248,8 +245,6 @@ fn validate_settings(
         || selected.config.mozilla_readability.nb_top_candidates > 1000
         || selected.config.mozilla_readability.char_threshold > 1_000_000
         || selected.config.resiliparse.regions.skip_elements.len() > 64
-        || selected.config.html2text.max_wrap_width > 32_000
-        || selected.config.html2text.min_wrap_width > 32_000
         || selected.config.node_html_markdown.max_consecutive_newlines > 100
     {
         return Err(invalid(

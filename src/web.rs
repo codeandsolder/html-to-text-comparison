@@ -433,7 +433,6 @@ pub fn apply_extractor_config(
     }
     match name {
         "fast_html2md" => set_typed!(fast_html2md, "fast_html2md"),
-        "html2md" => set_typed!(html2md, "html2md"),
         "resiliparse" => {
             set_typed!(resiliparse, "resiliparse");
             if !matches!(
@@ -452,7 +451,6 @@ pub fn apply_extractor_config(
         }
         "mozilla-readability" => set_typed!(mozilla_readability, "mozilla_readability"),
         "node-html-markdown" => set_typed!(node_html_markdown, "node_html_markdown"),
-        "html2text" => set_typed!(html2text, "html2text"),
         "htmd" => {
             set_typed!(htmd, "htmd");
             state
@@ -487,7 +485,6 @@ pub fn apply_extractor_config(
         "percollate" => set_typed!(percollate, "percollate"),
         "mdream" => set_typed!(mdream, "mdream"),
         "trafilatura" => set_typed!(trafilatura, "trafilatura"),
-        "html2text-py" => set_typed!(html2text_py, "html2text_py"),
         "markdownify" => set_typed!(markdownify, "markdownify"),
         "webclaw" => set_typed!(webclaw, "webclaw"),
         "e2m" => set_typed!(e2m, "e2m"),
@@ -610,22 +607,22 @@ mod tests {
         let mut state = ExtractorState::default();
 
         assert!(apply_extractor_config(
-            "html2text",
+            "htmd",
             &serde_json::json!({
                 "skip_tags": [],
-                "html2text": {
-                    "max_wrap_width": 42,
-                    "raw_mode": true,
-                    "no_link_wrapping": true
+                "htmd": {
+                    "heading_style": "setex",
+                    "hr_style": "dashes",
+                    "preformatted_code": true
                 }
             }),
             &mut state,
         )
         .is_ok());
 
-        assert_eq!(state.config.html2text.max_wrap_width, 42);
-        assert!(state.config.html2text.raw_mode);
-        assert!(state.config.html2text.no_link_wrapping);
+        assert_eq!(state.config.htmd.heading_style, "setex");
+        assert_eq!(state.config.htmd.hr_style, "dashes");
+        assert!(state.config.htmd.preformatted_code);
     }
 
     #[test]
@@ -633,14 +630,14 @@ mod tests {
         let mut state = ExtractorState::default();
         let before = serde_json::to_value(&state.config).ok();
         assert!(apply_extractor_config(
-            "html2text",
-            &serde_json::json!({"max_wrap_width": "not a number"}),
+            "htmd",
+            &serde_json::json!({"ul_bullet_spacing": "not a number"}),
             &mut state,
         )
         .is_err());
         assert_eq!(serde_json::to_value(&state.config).ok(), before);
         assert!(apply_extractor_config(
-            "html2text",
+            "htmd",
             &serde_json::json!({"timeout_ms": 900_001}),
             &mut state,
         )

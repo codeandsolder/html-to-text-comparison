@@ -147,40 +147,6 @@ impl Default for TrafilaturaConfig {
 #[serde(default)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "These independently configurable flags map directly to the Html2TextPythonConfig extractor settings exposed through serde"
-)]
-pub struct Html2TextPythonConfig {
-    pub ignore_links: bool,
-    pub ignore_images: bool,
-    pub ignore_emphasis: bool,
-    pub body_width: usize,
-    pub unicode_snob: bool,
-    pub escape_snob: bool,
-    pub inline_links: bool,
-    pub google_doc: bool,
-    pub dash_unordered_list: bool,
-}
-
-impl Default for Html2TextPythonConfig {
-    fn default() -> Self {
-        Self {
-            ignore_links: false,
-            ignore_images: false,
-            ignore_emphasis: false,
-            body_width: 78,
-            unicode_snob: false,
-            escape_snob: false,
-            inline_links: true,
-            google_doc: false,
-            dash_unordered_list: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-#[expect(
-    clippy::struct_excessive_bools,
     reason = "These independently configurable flags map directly to the MarkdownifyConfig extractor settings exposed through serde"
 )]
 pub struct MarkdownifyConfig {
@@ -291,42 +257,6 @@ impl Default for HtmlToMarkdownGoConfig {
             plugins: vec!["commonmark".to_string()],
             include_selector: String::new(),
             exclude_selector: String::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "These independently configurable flags map directly to the Html2TextConfig extractor settings exposed through serde"
-)]
-pub struct Html2TextConfig {
-    pub max_wrap_width: usize,
-    pub min_wrap_width: usize,
-    pub raw_mode: bool,
-    pub no_link_wrapping: bool,
-    pub link_footnotes: bool,
-    pub no_table_borders: bool,
-    pub unicode_strikeout: bool,
-    pub decorate: bool,
-    pub pad_block_width: bool,
-    pub allow_width_overflow: bool,
-}
-
-impl Default for Html2TextConfig {
-    fn default() -> Self {
-        Self {
-            max_wrap_width: 1000,
-            min_wrap_width: 3,
-            raw_mode: false,
-            no_link_wrapping: false,
-            link_footnotes: false,
-            no_table_borders: false,
-            unicode_strikeout: true,
-            decorate: false,
-            pad_block_width: false,
-            allow_width_overflow: false,
         }
     }
 }
@@ -498,12 +428,6 @@ pub struct FastHtml2MdConfig {
     pub preserve_spans: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct Html2MdConfig {
-    pub preserve_spans: bool,
-}
-
 /// Select which document regions contribute to the extraction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -647,11 +571,9 @@ pub struct ExtractorConfig {
     pub timeout_ms: Option<u64>,
     pub skip_tags: Vec<String>,
     pub fast_html2md: FastHtml2MdConfig,
-    pub html2md: Html2MdConfig,
     pub resiliparse: ResiliparseConfig,
     pub mozilla_readability: MozillaReadabilityConfig,
     pub node_html_markdown: NodeHtmlMarkdownConfig,
-    pub html2text: Html2TextConfig,
     pub htmd: HtmdConfig,
     pub html2md_rs: Html2MdRsConfig,
     pub mdka: MdkaConfig,
@@ -662,7 +584,6 @@ pub struct ExtractorConfig {
     pub percollate: PercollateConfig,
     pub mdream: MdreamConfig,
     pub trafilatura: TrafilaturaConfig,
-    pub html2text_py: Html2TextPythonConfig,
     pub markdownify: MarkdownifyConfig,
     pub webclaw: WebclawConfig,
     pub e2m: E2mConfig,
@@ -679,7 +600,7 @@ pub fn default_timeout_ms(name: &str) -> u64 {
     match name {
         "e2m" => 120_000,
         "webclaw" => 60_000,
-        "percollate" | "trafilatura" | "markdownify" | "html2text-py" | "resiliparse" => 45_000,
+        "percollate" | "trafilatura" | "markdownify" | "resiliparse" => 45_000,
         "turndown" | "html-to-markdown-go" | "webforai" => 30_000,
         _ => 10_000,
     }
@@ -762,10 +683,7 @@ impl Default for ExtractorStates {
             "defuddle",
             "e2m",
             "fast_html2md",
-            "html2md",
             "html2md-rs",
-            "html2text",
-            "html2text-py",
             "markdownify",
             "mozilla-readability",
             "html-to-markdown-go",
@@ -786,13 +704,6 @@ impl Default for ExtractorStates {
         ];
         for name in all_extractors {
             let cfg = match name {
-                "html2text" => ExtractorConfig {
-                    html2text: Html2TextConfig {
-                        max_wrap_width: 1000,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
                 "htmd" => ExtractorConfig {
                     skip_tags: DEFAULT_SKIP_TAGS
                         .iter()
@@ -872,10 +783,6 @@ impl Default for ExtractorStates {
                     trafilatura: TrafilaturaConfig::default(),
                     ..Default::default()
                 },
-                "html2text-py" => ExtractorConfig {
-                    html2text_py: Html2TextPythonConfig::default(),
-                    ..Default::default()
-                },
                 "markdownify" => ExtractorConfig {
                     markdownify: MarkdownifyConfig::default(),
                     ..Default::default()
@@ -914,6 +821,17 @@ mod tests {
     use super::MdkaConfig;
 
     #[test]
+    fn removed_extractors_are_not_registered() {
+        let states = super::ExtractorStates::default();
+        for name in ["html2md", "html2text", "html2text-py"] {
+            assert!(!states.states.contains_key(name));
+        }
+        for name in ["fast_html2md", "html2md-rs", "nanohtml2text"] {
+            assert!(states.states.contains_key(name));
+        }
+    }
+
+    #[test]
     fn extractor_timeouts_match_backend_costs() {
         let states = super::ExtractorStates::default();
         assert_eq!(states.states["e2m"].timeout("e2m").as_millis(), 120_000);
@@ -923,10 +841,7 @@ mod tests {
                 .as_millis(),
             45_000
         );
-        assert_eq!(
-            states.states["html2text"].timeout("html2text").as_millis(),
-            10_000
-        );
+        assert_eq!(states.states["htmd"].timeout("htmd").as_millis(), 10_000);
     }
 
     #[test]
