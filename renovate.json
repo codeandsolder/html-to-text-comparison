@@ -6,42 +6,6 @@
   "rangeStrategy": "bump",
   "packageRules": [
     {
-      "description": "E2M integration is release-tier and must not merge without an explicit heavy test",
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchPackageNames": [
-        "wisup-e2m"
-      ],
-      "automerge": false
-    },
-    {
-      "description": "Resiliparse text extraction updates require fixture-based review",
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchPackageNames": [
-        "resiliparse"
-      ],
-      "automerge": false
-    },
-    {
-      "description": "JS extraction engine and DOM dependencies must pass real content comparisons",
-      "matchManagers": [
-        "npm"
-      ],
-      "matchPackageNames": [
-        "@mozilla/readability",
-        "linkedom",
-        "defuddle",
-        "cloakbrowser",
-        "playwright-core",
-        "node-html-markdown",
-        "webforai"
-      ],
-      "automerge": false
-    },
-    {
       "description": "CloakBrowser 0.7.2 requires playwright-core <1.65; block incompatible updates",
       "matchManagers": [
         "npm"
@@ -49,8 +13,7 @@
       "matchPackageNames": [
         "playwright-core"
       ],
-      "allowedVersions": "<1.65.0",
-      "automerge": false
+      "allowedVersions": "<1.65.0"
     }
   ],
   "customManagers": [
