@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::acquisition::Acquisition;
 use crate::extractor_config::{
-    ExtractorStates, Html2TextPythonConfig, HtmlToMarkdownGoConfig, MarkdownifyConfig,
-    PercollateConfig, TrafilaturaConfig, TurndownConfig, DEFAULT_SKIP_TAGS,
+    ExtractorStates, HtmlToMarkdownGoConfig, MarkdownifyConfig, PercollateConfig,
+    TrafilaturaConfig, TurndownConfig, DEFAULT_SKIP_TAGS,
 };
 use crate::runner::{ExtractionStatus, Runner};
 use crate::runtime_config::ExecutionPolicy;
@@ -159,43 +159,6 @@ pub fn run_named_extractor(
                 llm_readability::extractor::extract(&mut html, &parsed_url)
                     .map(|result| result.text)
                     .map_err(|error| format!("llm_readability failed: {error:?}"))
-            });
-        }
-        #[cfg(feature = "html2text")]
-        "html2text" => {
-            let cfg = states
-                .states
-                .get("html2text")
-                .map_or_default(|s| s.config.html2text.clone());
-            runner.run(output_name, move |html| {
-                let mut html = std::io::Cursor::new(html.as_bytes());
-                let width = cfg.max_wrap_width.max(1);
-                let mut render = html2text::config::plain()
-                    .max_wrap_width(width)
-                    .min_wrap_width(cfg.min_wrap_width.max(1))
-                    .raw_mode(cfg.raw_mode);
-                if cfg.no_link_wrapping {
-                    render = render.no_link_wrapping();
-                }
-                if cfg.link_footnotes {
-                    render = render.link_footnotes(true);
-                }
-                if cfg.no_table_borders {
-                    render = render.no_table_borders();
-                }
-                if cfg.pad_block_width {
-                    render = render.pad_block_width();
-                }
-                if cfg.allow_width_overflow {
-                    render = render.allow_width_overflow();
-                }
-                if cfg.decorate {
-                    render = render.do_decorate();
-                }
-                render = render.unicode_strikeout(cfg.unicode_strikeout);
-                render
-                    .string_from_read(&mut html, width)
-                    .map_err(|error| format!("html2text failed: {error}"))
             });
         }
         #[cfg(feature = "htmd")]
@@ -373,20 +336,6 @@ pub fn run_named_extractor(
                     Ok(fast_html2md::parse_html_extended(html, cfg.commonmark))
                 } else {
                     Ok(fast_html2md::parse_html(html, cfg.commonmark))
-                }
-            });
-        }
-        #[cfg(feature = "html2md")]
-        "html2md" => {
-            let cfg = states
-                .states
-                .get("html2md")
-                .map_or_default(|s| s.config.html2md.clone());
-            runner.run(output_name, move |html| {
-                if cfg.preserve_spans {
-                    Ok(html2md::parse_html_extended(html))
-                } else {
-                    Ok(html2md::parse_html(html))
                 }
             });
         }
@@ -700,14 +649,6 @@ pub fn run_cli_extractor(
                 .states
                 .get("trafilatura")
                 .map_or_default(|s| s.config.trafilatura.clone()),
-        ),
-        "html2text-py" => run_html2text_py(
-            policy,
-            html,
-            &states
-                .states
-                .get("html2text-py")
-                .map_or_default(|s| s.config.html2text_py.clone()),
         ),
         "mozilla-readability" => run_mozilla_readability(
             policy,
@@ -1088,23 +1029,6 @@ fn run_trafilatura(
     run_python_snapshot(
         policy,
         "trafilatura",
-        html,
-        script,
-        &["/input.html", &cfg_json],
-    )
-}
-
-fn run_html2text_py(
-    policy: &ExecutionPolicy,
-    html: &str,
-    cfg: &Html2TextPythonConfig,
-) -> Result<String, String> {
-    let cfg_json = serde_json::to_string(cfg)
-        .map_err(|error| format!("serializing configuration: {error}"))?;
-    let script = r"from html2text import HTML2Text; import json, sys; cfg = json.loads(sys.argv[2]); h = HTML2Text(); h.ignore_links = cfg['ignore_links']; h.ignore_images = cfg['ignore_images']; h.ignore_emphasis = cfg['ignore_emphasis']; h.body_width = cfg['body_width']; h.unicode_snob = cfg['unicode_snob']; h.escape_snob = cfg['escape_snob']; h.inline_links = cfg['inline_links']; h.google_doc = cfg['google_doc']; h.dash_unordered_list = cfg['dash_unordered_list']; html = open(sys.argv[1]).read(); print(h.handle(html), end='')";
-    run_python_snapshot(
-        policy,
-        "html2text",
         html,
         script,
         &["/input.html", &cfg_json],
@@ -1651,7 +1575,7 @@ impl ScoreStore {
 mod tests {
     use super::*;
     use crate::extractor_config::{
-        ExtractorConfig, HtmdConfig, Html2TextConfig, HtmlToMarkdownGoConfig, PercollateConfig,
+        ExtractorConfig, HtmdConfig, HtmlToMarkdownGoConfig, PercollateConfig,
     };
 
     fn test_store() -> Result<(ScoreStore, PathBuf), String> {
@@ -1827,53 +1751,6 @@ mod tests {
         assert!(path.exists(), "new in-flight run must not be removed");
         repository.prune_orphans(std::time::Duration::ZERO)?;
         assert!(!path.exists(), "stale orphan must be removed");
-        Ok(())
-    }
-
-    #[test]
-    fn compare_settings_applies_html2text_config() -> Result<(), Box<dyn std::error::Error>> {
-        let (score_store, dir) = test_store()?;
-        let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
-        let baseline = ExtractorConfig {
-            html2text: Html2TextConfig {
-                max_wrap_width: 12,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let candidate = ExtractorConfig {
-            html2text: Html2TextConfig {
-                max_wrap_width: 120,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let score = compare_single_extractor_settings(
-            &ExecutionPolicy::default(),
-            "https://example.com",
-            html,
-            "html2text",
-            baseline,
-            candidate,
-            &score_store,
-        )?;
-
-        assert_eq!(score.extractor_results[0].name, "html2text baseline");
-        assert_eq!(score.extractor_results[0].extractor_key, "html2text");
-        assert_eq!(
-            score.extractor_results[1].name,
-            "html2text current settings"
-        );
-        assert_eq!(score.extractor_results[1].extractor_key, "html2text");
-
-        let baseline_output = std::fs::read_to_string(&score.extractor_results[0].output_file)?;
-        let candidate_output = std::fs::read_to_string(&score.extractor_results[1].output_file)?;
-
-        assert_ne!(baseline_output, candidate_output);
-        assert!(baseline_output.matches('\n').count() > candidate_output.matches('\n').count());
-
-        let _ = std::fs::remove_dir_all(dir);
         Ok(())
     }
 
@@ -2229,7 +2106,7 @@ mod tests {
             ExecutionPolicy::default(),
         );
         let states = ExtractorStates::default();
-        for key in ["nanohtml2text", "html2md"] {
+        for key in ["nanohtml2text", "htmd"] {
             runner.run_isolated(key, key, "https://example.com/", &states);
         }
         let results = runner.into_stats();
@@ -2255,24 +2132,24 @@ mod tests {
 
     #[test]
     fn preview_single_extractor_returns_current_output() -> Result<(), Box<dyn std::error::Error>> {
-        let html = "<html><body><p>alpha beta gamma delta epsilon zeta eta theta</p></body></html>";
+        let html = "<html><body><h1>Title</h1><p>Body</p></body></html>";
         let preview = preview_single_extractor_settings(
             &ExecutionPolicy::default(),
             "https://example.com",
             html,
-            "html2text",
+            "htmd",
             ExtractorConfig {
-                html2text: Html2TextConfig {
-                    max_wrap_width: 12,
+                htmd: HtmdConfig {
+                    heading_style: "atx".to_string(),
                     ..Default::default()
                 },
                 ..Default::default()
             },
         )?;
 
-        assert_eq!(preview.extractor_key, "html2text");
-        assert!(preview.output.contains("alpha beta"));
-        assert!(preview.output.matches('\n').count() > 1);
+        assert_eq!(preview.extractor_key, "htmd");
+        assert!(preview.output.contains("# Title"));
+        assert!(preview.output.contains("Body"));
         Ok(())
     }
 
@@ -2351,9 +2228,9 @@ mod tests {
         let host_net = std::fs::read_link("/proc/self/ns/net")?;
         let output = run_python_snapshot(
             &ExecutionPolicy::default(),
-            "html2text",
+            "markdownify",
             "fixture",
-            r"import os, sys, pathlib, html2text
+            r"import os, sys, pathlib, markdownify
 assert sys.implementation.name == 'pypy'
 assert sys.flags.isolated and sys.dont_write_bytecode
 assert pathlib.Path('/input.html').read_text() == 'fixture'
@@ -2389,8 +2266,13 @@ print('isolated')
             extractor_assets: assets.path().to_owned(),
             ..Default::default()
         };
-        let result =
-            run_python_snapshot(&policy, "html2text", "fixture", "print('unexpected')", &[]);
+        let result = run_python_snapshot(
+            &policy,
+            "markdownify",
+            "fixture",
+            "print('unexpected')",
+            &[],
+        );
         assert!(
             matches!(result, Err(ref error) if error.contains("missing provisioned Python runtime")),
             "{result:?}"

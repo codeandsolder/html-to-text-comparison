@@ -622,15 +622,8 @@
             throw new Error('Failed to load diff library: expected window.Diff from jsdiff');
         }
 
-        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','defuddle','e2m','fast_html2md','html2md','html2md-rs','html2text','html2text-py','html-to-markdown-go','htmd','llm_readability','markdownify','mdka','mdream','mozilla-readability','nanohtml2text','node-html-markdown','percollate','readability','readable-readability','resiliparse','trafilatura','turndown','webclaw','webforai'];
+        const EXTRACTORS = ['august','boilerpipe','dom_smoothie','defuddle','e2m','fast_html2md','html2md-rs','html-to-markdown-go','htmd','llm_readability','markdownify','mdka','mdream','mozilla-readability','nanohtml2text','node-html-markdown','percollate','readability','readable-readability','resiliparse','trafilatura','turndown','webclaw','webforai'];
         const CONFIG_FIELDS = {
-            html2text: [
-                {name:'max_wrap_width',type:'number'},{name:'min_wrap_width',type:'number'},
-                {name:'raw_mode',type:'checkbox'},{name:'no_link_wrapping',type:'checkbox'},
-                {name:'link_footnotes',type:'checkbox'},{name:'no_table_borders',type:'checkbox'},
-                {name:'unicode_strikeout',type:'checkbox'},{name:'decorate',type:'checkbox'},
-                {name:'pad_block_width',type:'checkbox'},{name:'allow_width_overflow',type:'checkbox'}
-            ],
             htmd: [
                 {name:'skip_tags',type:'text'},{name:'heading_style',type:'select',options:['atx','setex']},
                 {name:'hr_style',type:'select',options:['asterisks','dashes','underscores']},
@@ -695,13 +688,6 @@
                 {name:'favor_precision',type:'checkbox'},{name:'favor_recall',type:'checkbox'},
                 {name:'deduplicate',type:'checkbox'},{name:'with_metadata',type:'checkbox'},
             ],
-            html2text_py: [
-                {name:'ignore_links',type:'checkbox'},{name:'ignore_images',type:'checkbox'},
-                {name:'ignore_emphasis',type:'checkbox'},{name:'body_width',type:'number'},
-                {name:'unicode_snob',type:'checkbox'},{name:'escape_snob',type:'checkbox'},
-                {name:'inline_links',type:'checkbox'},{name:'google_doc',type:'checkbox'},
-                {name:'dash_unordered_list',type:'checkbox'},
-            ],
             markdownify: [
                 {name:'strip',type:'text'},{name:'convert',type:'text'},
                 {name:'autolinks',type:'checkbox'},{name:'default_title',type:'checkbox'},
@@ -737,7 +723,6 @@
         };
         const CONFIGURABLE_EXTRACTORS = Object.keys(CONFIG_FIELDS).filter(name => (CONFIG_FIELDS[name] || []).length > 0);
         const FIELD_MAP = {
-            html2text: {max_wrap_width:'html2text',min_wrap_width:'html2text',raw_mode:'html2text',no_link_wrapping:'html2text',link_footnotes:'html2text',no_table_borders:'html2text',unicode_strikeout:'html2text',decorate:'html2text',pad_block_width:'html2text',allow_width_overflow:'html2text'},
             htmd: {skip_tags:'htmd',heading_style:'htmd',hr_style:'htmd',br_style:'htmd',link_style:'htmd',link_reference_style:'htmd',code_block_style:'htmd',code_block_fence:'htmd',bullet_list_marker:'htmd',ul_bullet_spacing:'htmd',ol_number_spacing:'htmd',preformatted_code:'htmd',translation_mode:'htmd'},
             'html2md-rs': {ignore_tags:'html2md_rs'},
             mdka: {mode:'mdka',preserve_ids:'mdka',drop_interactive_shell:'mdka',emphasis_from_style:'mdka',backslash_hard_breaks:'mdka'},
@@ -748,7 +733,6 @@
             percollate: {hyphenate:'percollate',fences:'percollate',fence:'percollate',emphasis:'percollate',strong:'percollate',resource_link:'percollate',rule:'percollate'},
             mdream: {minimal:'mdream',isolate_main:'mdream',frontmatter:'mdream',clean_urls:'mdream',tailwind:'mdream',origin:'mdream',clean_fragments:'mdream',clean_empty_links:'mdream',clean_redundant_links:'mdream',clean_self_link_headings:'mdream',clean_empty_images:'mdream',clean_empty_link_text:'mdream',filter_include:'mdream',filter_exclude:'mdream',filter_process_children:'mdream',frontmatter_meta_fields:'mdream',extraction_selectors:'mdream'},
             trafilatura: {favor_precision:'trafilatura',favor_recall:'trafilatura',include_comments:'trafilatura',include_tables:'trafilatura',include_images:'trafilatura',include_formatting:'trafilatura',include_links:'trafilatura',deduplicate:'trafilatura',with_metadata:'trafilatura'},
-            html2text_py: {ignore_links:'html2text_py',ignore_images:'html2text_py',ignore_emphasis:'html2text_py',body_width:'html2text_py',unicode_snob:'html2text_py',escape_snob:'html2text_py',inline_links:'html2text_py',google_doc:'html2text_py',dash_unordered_list:'html2text_py'},
             markdownify: {strip:'markdownify',convert:'markdownify',autolinks:'markdownify',default_title:'markdownify',heading_style:'markdownify',bullets:'markdownify',strong_em_symbol:'markdownify',sub_symbol:'markdownify',sup_symbol:'markdownify',newline_style:'markdownify',code_language:'markdownify',escape_asterisks:'markdownify',escape_underscores:'markdownify',escape_misc:'markdownify',keep_inline_images_in:'markdownify',table_infer_header:'markdownify',wrap:'markdownify',wrap_width:'markdownify',strip_document:'markdownify',strip_pre:'markdownify',bs4_parser:'markdownify'},
             webclaw: {only_main_content:'webclaw',include_css:'webclaw',exclude_css:'webclaw',format:'webclaw'},
             e2m: {engine:'e2m',langs:'e2m',skip_headers_and_footers:'e2m',include_image_link_in_text:'e2m'},
@@ -862,7 +846,6 @@
 
         function getExtractorConfigPayload(name) {
             const cfg = getExtractorConfig(name);
-            if (name === 'html2text') return structuredClone(cfg.html2text || {});
             if (name === 'htmd') return structuredClone(cfg.htmd || {});
             if (name === 'html2md-rs') return structuredClone(cfg.html2md_rs || {});
             if (name === 'mdka') return structuredClone(cfg.mdka || {});
@@ -873,7 +856,6 @@
             if (name === 'percollate') return structuredClone(cfg.percollate || {});
             if (name === 'mdream') return structuredClone(cfg.mdream || {});
             if (name === 'trafilatura') return structuredClone(cfg.trafilatura || {});
-            if (name === 'html2text-py') return structuredClone(cfg.html2text_py || {});
             if (name === 'markdownify') return structuredClone(cfg.markdownify || {});
             if (name === 'webclaw') return structuredClone(cfg.webclaw || {});
             if (name === 'e2m') return structuredClone(cfg.e2m || {});

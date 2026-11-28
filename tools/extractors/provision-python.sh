@@ -13,7 +13,7 @@ case "$runtime" in /|/usr|/usr/local) echo "Use a relocatable Python distributio
 test -x "$runtime/bin/python3"
 for adapter in "$@"; do
     case "$adapter" in
-        html2text|markdownify|resiliparse|trafilatura|e2m) ;;
+        markdownify|resiliparse|trafilatura|e2m) ;;
         *) echo "Unknown Python adapter: $adapter" >&2; exit 64 ;;
     esac
     dir="$assets/python/$adapter"
